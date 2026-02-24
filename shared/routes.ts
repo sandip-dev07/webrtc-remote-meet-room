@@ -29,6 +29,14 @@ export const api = {
         }),
         404: errorSchemas.notFound,
       }
+    },
+    participantCounts: {
+      method: 'GET' as const,
+      path: '/api/rooms/:id/subroom-participant-counts' as const,
+      responses: {
+        200: z.record(z.string(), z.number()),
+        404: errorSchemas.notFound,
+      }
     }
   },
   subrooms: {

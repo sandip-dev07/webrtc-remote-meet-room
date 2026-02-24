@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useLocation } from "wouter";
+import { useMemo, useState } from "react";
+import { useLocation, useSearch } from "wouter";
 import { Video, ArrowRight, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,23 +9,35 @@ import { useToast } from "@/hooks/use-toast";
 
 export default function Home() {
   const [, setLocation] = useLocation();
+  const search = useSearch();
   const { username, setUsername } = useMeetingStore();
   const { toast } = useToast();
   const createRoom = useCreateRoom();
+  const prefilledRoomId = useMemo(
+    () => new URLSearchParams(search).get("roomId") ?? "",
+    [search],
+  );
   
-  const [roomId, setRoomId] = useState("");
-  const [localName, setLocalName] = useState(username);
+  const [roomId, setRoomId] = useState(prefilledRoomId);
+  const [createName, setCreateName] = useState(username);
+  const [joinName, setJoinName] = useState(username);
+  const inputClassName =
+    "h-12 rounded-xl bg-black/20 border-white/10 text-base text-foreground placeholder:text-muted-foreground/80 focus-visible:ring-primary/60 focus-visible:ring-offset-0";
+  const primaryButtonClassName =
+    "h-12 rounded-xl text-base font-semibold bg-gradient-to-r from-primary to-blue-600 hover:from-primary/90 hover:to-blue-600/90 shadow-lg shadow-primary/20 transition-colors";
+  const secondaryButtonClassName =
+    "h-12 rounded-xl text-base font-semibold bg-white/5 border border-white/20 hover:bg-white/10 transition-colors";
 
   const handleCreate = async () => {
-    if (!localName.trim()) {
+    if (!createName.trim()) {
       toast({ title: "Name required", description: "Please enter your name to continue.", variant: "destructive" });
       return;
     }
     
-    setUsername(localName.trim());
+    setUsername(createName.trim());
     
     try {
-      const room = await createRoom.mutateAsync(localName.trim());
+      const room = await createRoom.mutateAsync(createName.trim());
       setLocation(`/room/${room.id}`);
       toast({ title: "Room Created", description: `Main room ${room.id} is ready.` });
     } catch (err: any) {
@@ -34,12 +46,12 @@ export default function Home() {
   };
 
   const handleJoin = () => {
-    if (!localName.trim() || !roomId.trim()) {
-      toast({ title: "Fields required", description: "Please enter both name and Room ID.", variant: "destructive" });
+    if (!joinName.trim() || !roomId.trim()) {
+      toast({ title: "Fields required", description: "Please enter both joining name and Room ID.", variant: "destructive" });
       return;
     }
     
-    setUsername(localName.trim());
+    setUsername(joinName.trim());
     setLocation(`/room/${roomId.trim()}`);
   };
 
@@ -66,14 +78,14 @@ export default function Home() {
         </div>
 
         {/* Right Col - Forms */}
-        <div className="glass-panel p-8 rounded-3xl space-y-8 relative">
+        <div className="glass-panel p-8 rounded-3xl space-y-6 relative">
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground/80 ml-1">Your Name</label>
             <Input 
-              value={localName}
-              onChange={(e) => setLocalName(e.target.value)}
+              value={createName}
+              onChange={(e) => setCreateName(e.target.value)}
               placeholder="John Doe" 
-              className="bg-black/20 border-white/10 h-12 rounded-xl text-lg focus-visible:ring-primary"
+              className={inputClassName}
             />
           </div>
 
@@ -81,7 +93,7 @@ export default function Home() {
             <Button 
               onClick={handleCreate}
               disabled={createRoom.isPending}
-              className="w-full h-14 text-lg rounded-xl bg-gradient-to-r from-primary to-blue-600 hover:from-primary/90 hover:to-blue-600/90 shadow-xl shadow-primary/20 hover:shadow-primary/40 transition-all hover:-translate-y-1 font-semibold"
+              className={`w-full ${primaryButtonClassName}`}
             >
               {createRoom.isPending ? "Creating..." : "Create New Main Room"}
               {!createRoom.isPending && <Plus className="ml-2" />}
@@ -94,21 +106,30 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="flex gap-3">
-              <Input 
-                value={roomId}
-                onChange={(e) => setRoomId(e.target.value)}
-                placeholder="Enter Room ID" 
-                className="bg-black/20 border-white/10 h-14 rounded-xl text-lg focus-visible:ring-primary flex-1"
-                onKeyDown={(e) => e.key === 'Enter' && handleJoin()}
+            <div className="space-y-3">
+              <label className="text-sm font-medium text-foreground/80 ml-1">Joining Name</label>
+              <Input
+                value={joinName}
+                onChange={(e) => setJoinName(e.target.value)}
+                placeholder="Joining Name"
+                className={inputClassName}
               />
-              <Button 
-                onClick={handleJoin}
-                variant="secondary"
-                className="h-14 px-8 rounded-xl font-semibold hover:bg-white/10 transition-colors"
-              >
-                Join <ArrowRight className="ml-2" size={18} />
-              </Button>
+              <div className="flex gap-3">
+                <Input 
+                  value={roomId}
+                  onChange={(e) => setRoomId(e.target.value)}
+                  placeholder="Enter Room ID" 
+                  className={`${inputClassName} flex-1`}
+                  onKeyDown={(e) => e.key === 'Enter' && handleJoin()}
+                />
+                <Button 
+                  onClick={handleJoin}
+                  variant="secondary"
+                  className={`px-6 ${secondaryButtonClassName}`}
+                >
+                  Join <ArrowRight className="ml-2" size={18} />
+                </Button>
+              </div>
             </div>
           </div>
         </div>

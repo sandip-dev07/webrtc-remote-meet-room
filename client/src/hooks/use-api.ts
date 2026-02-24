@@ -1,6 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
-import { z } from "zod";
 
 // --- Rooms ---
 
@@ -106,4 +105,24 @@ export function useSubroomParticipants(subroomId: string) {
     },
     enabled: !!subroomId,
   });
+}
+
+export function useRoomSubroomParticipantCounts(roomId: string, subroomIds: string[]) {
+  const query = useQuery({
+    queryKey: ['room', roomId, 'subroom-participant-counts'],
+    queryFn: async () => {
+      const url = buildUrl(api.rooms.participantCounts.path, { id: roomId });
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch subroom participant counts");
+      return api.rooms.participantCounts.responses[200].parse(await res.json());
+    },
+    enabled: !!roomId && subroomIds.length > 0,
+    refetchInterval: 3000,
+    refetchIntervalInBackground: false,
+  });
+
+  return subroomIds.reduce<Record<string, number>>((acc, subroomId) => {
+    acc[subroomId] = query.data?.[subroomId] ?? 0;
+    return acc;
+  }, {});
 }

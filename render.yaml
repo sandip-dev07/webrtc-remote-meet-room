@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: room-weaver
+    env: node
+    plan: free
+    autoDeploy: true
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Set this in Render dashboard or add here if using blueprint-managed secrets.
+      - key: DATABASE_URL
+        sync: false

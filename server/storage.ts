@@ -1,12 +1,11 @@
 import { db } from "./db";
 import {
-  rooms, subrooms, participants, messages,
+  rooms, subrooms, participants,
   type Room, type InsertRoom,
   type Subroom, type InsertSubroom,
-  type Participant, type InsertParticipant,
-  type Message, type InsertMessage
+  type Participant, type InsertParticipant
 } from "@shared/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 export interface IStorage {
   getRoom(id: string): Promise<Room | undefined>;
@@ -19,9 +18,6 @@ export interface IStorage {
   getParticipantsBySubroom(subroomId: string): Promise<Participant[]>;
   addParticipant(participant: InsertParticipant): Promise<Participant>;
   removeParticipant(socketId: string): Promise<void>;
-  
-  getMessagesBySubroom(subroomId: string): Promise<Message[]>;
-  addMessage(message: InsertMessage): Promise<Message>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -60,15 +56,6 @@ export class DatabaseStorage implements IStorage {
 
   async removeParticipant(socketId: string): Promise<void> {
     await db.delete(participants).where(eq(participants.socketId, socketId));
-  }
-
-  async getMessagesBySubroom(subroomId: string): Promise<Message[]> {
-    return await db.select().from(messages).where(eq(messages.subroomId, subroomId));
-  }
-
-  async addMessage(message: InsertMessage): Promise<Message> {
-    const [newMessage] = await db.insert(messages).values(message).returning();
-    return newMessage;
   }
 }
 

@@ -5,6 +5,7 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { WebSocketServer, WebSocket } from "ws";
 import crypto from "crypto";
+import type { Message } from "@shared/schema";
 
 function generateId() {
   return crypto.randomBytes(4).toString('hex');
@@ -14,6 +15,20 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  const socketMeta = new Map<
+    WebSocket,
+    {
+      socketId: string;
+      roomId: string;
+      subroomId: string;
+      username: string;
+      peerId: string;
+      joinedAt: Date;
+    }
+  >();
+  const transientMessagesBySubroom = new Map<string, Message[]>();
+  let transientMessageId = 1;
+  const MAX_TRANSIENT_MESSAGES_PER_SUBROOM = 100;
   
   app.post(api.rooms.create.path, async (req, res) => {
     try {
@@ -39,6 +54,27 @@ export async function registerRoutes(
     }
     const subrooms = await storage.getSubroomsByRoom(room.id);
     res.status(200).json({ room, subrooms });
+  });
+
+  app.get(api.rooms.participantCounts.path, async (req, res) => {
+    const room = await storage.getRoom(req.params.id);
+    if (!room) {
+      return res.status(404).json({ message: "Room not found" });
+    }
+
+    const subrooms = await storage.getSubroomsByRoom(room.id);
+    const counts = subrooms.reduce<Record<string, number>>((acc, subroom) => {
+      acc[subroom.id] = 0;
+      return acc;
+    }, {});
+
+    Array.from(socketMeta.values()).forEach((meta) => {
+      if (counts[meta.subroomId] !== undefined) {
+        counts[meta.subroomId] += 1;
+      }
+    });
+
+    res.status(200).json(counts);
   });
 
   app.post(api.subrooms.create.path, async (req, res) => {
@@ -78,51 +114,120 @@ export async function registerRoutes(
   });
 
   app.get(api.subrooms.participants.path, async (req, res) => {
-    const participants = await storage.getParticipantsBySubroom(req.params.id);
-    res.status(200).json(participants);
+    const subroomId = req.params.id;
+    const activeParticipants = Array.from(socketMeta.values())
+      .filter((meta) => meta.subroomId === subroomId)
+      .map((meta, index) => ({
+        id: index + 1,
+        subroomId: meta.subroomId,
+        username: meta.username,
+        socketId: meta.socketId,
+        joinedAt: meta.joinedAt,
+      }));
+    res.status(200).json(activeParticipants);
   });
 
   app.get(api.subrooms.messages.path, async (req, res) => {
-    const messages = await storage.getMessagesBySubroom(req.params.id);
+    const subroomId = req.params.id;
+    const messages = transientMessagesBySubroom.get(subroomId) ?? [];
     res.status(200).json(messages);
   });
 
   // Setup WebSocket server for signaling and chat
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  const wss = new WebSocketServer({
+    server: httpServer,
+    path: '/ws',
+    maxPayload: 16 * 1024,
+  });
+
+  const HEARTBEAT_MS = 30000;
+  const wsLiveness = new Map<WebSocket, boolean>();
+
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((client) => {
+      if (wsLiveness.get(client) === false) {
+        client.terminate();
+        return;
+      }
+
+      wsLiveness.set(client, false);
+      if (client.readyState === WebSocket.OPEN) {
+        client.ping();
+      }
+    });
+  }, HEARTBEAT_MS);
+
+  wss.on("close", () => {
+    clearInterval(heartbeatInterval);
+  });
 
   wss.on('connection', (ws, req) => {
     const socketId = crypto.randomUUID();
     let currentSubroomId: string | null = null;
     let currentUsername: string | null = null;
+    let currentPeerId: string | null = null;
+
+    wsLiveness.set(ws, true);
+    ws.on("pong", () => {
+      wsLiveness.set(ws, true);
+    });
 
     ws.on('message', async (data) => {
       try {
         const message = JSON.parse(data.toString());
         
         if (message.type === 'join') {
-          const { subroomId, username, peerId } = message.payload;
+          const { roomId, subroomId, username, peerId } = message.payload;
           
           const subroom = await storage.getSubroom(subroomId);
           if (!subroom) {
             ws.send(JSON.stringify({ type: 'error', payload: { message: "Subroom not found" } }));
             return;
           }
+          if (subroom.roomId !== roomId) {
+            ws.send(JSON.stringify({ type: 'error', payload: { message: "Subroom does not belong to this room" } }));
+            return;
+          }
 
-          const existingParticipants = await storage.getParticipantsBySubroom(subroomId);
-          if (existingParticipants.length >= 10) {
+          const activeCount = Array.from(socketMeta.values()).filter(
+            (meta) => meta.subroomId === subroomId
+          ).length;
+          if (activeCount >= 10) {
             ws.send(JSON.stringify({ type: 'error', payload: { message: "Subroom is full (max 10 participants)" } }));
             return;
           }
 
+          // If this socket is rejoining a different subroom, leave previous one first.
+          if (currentSubroomId && currentSubroomId !== subroomId) {
+            wss.clients.forEach(client => {
+              const meta = socketMeta.get(client);
+              if (
+                meta &&
+                meta.subroomId === currentSubroomId &&
+                client.readyState === WebSocket.OPEN
+              ) {
+                client.send(JSON.stringify({
+                  type: 'user-left',
+                  payload: { socketId, username: currentUsername, peerId: currentPeerId }
+                }));
+              }
+            });
+          }
+
           currentSubroomId = subroomId;
           currentUsername = username;
+          currentPeerId = peerId;
+          socketMeta.set(ws, { socketId, roomId, subroomId, username, peerId, joinedAt: new Date() });
 
-          // Add to database
-          await storage.addParticipant({ subroomId, username, socketId });
-
-          // Broadcast to others in the room
+          // Broadcast to others in the same subroom only.
           wss.clients.forEach(client => {
-            if (client !== ws && client.readyState === WebSocket.OPEN) {
+            const meta = socketMeta.get(client);
+            if (
+              client !== ws &&
+              meta &&
+              meta.subroomId === subroomId &&
+              client.readyState === WebSocket.OPEN
+            ) {
               client.send(JSON.stringify({
                 type: 'user-joined',
                 payload: { username, peerId, socketId }
@@ -132,27 +237,47 @@ export async function registerRoutes(
         } else if (message.type === 'chat') {
           if (currentSubroomId && currentUsername) {
             const { content } = message.payload;
-            const savedMessage = await storage.addMessage({
+            const transientMessage: Message = {
+              id: transientMessageId++,
               subroomId: currentSubroomId,
               username: currentUsername,
-              content
-            });
+              content,
+              createdAt: new Date(),
+            };
+
+            const existing = transientMessagesBySubroom.get(currentSubroomId) ?? [];
+            existing.push(transientMessage);
+            if (existing.length > MAX_TRANSIENT_MESSAGES_PER_SUBROOM) {
+              existing.splice(0, existing.length - MAX_TRANSIENT_MESSAGES_PER_SUBROOM);
+            }
+            transientMessagesBySubroom.set(currentSubroomId, existing);
 
             wss.clients.forEach(client => {
-              if (client.readyState === WebSocket.OPEN) {
+              const meta = socketMeta.get(client);
+              if (
+                meta &&
+                meta.subroomId === currentSubroomId &&
+                client.readyState === WebSocket.OPEN
+              ) {
                 client.send(JSON.stringify({
                   type: 'chat',
-                  payload: savedMessage
+                  payload: transientMessage
                 }));
               }
             });
           }
         } else if (message.type === 'signal') {
           // Relay signaling data for WebRTC
-          // In a real robust implementation, we would target specific socketIds
-          // For simplicity, we broadcast and let clients filter by peerId if needed
+          // Broadcast only within the current subroom to keep isolation strict.
+          if (!currentSubroomId) return;
           wss.clients.forEach(client => {
-            if (client !== ws && client.readyState === WebSocket.OPEN) {
+            const meta = socketMeta.get(client);
+            if (
+              client !== ws &&
+              meta &&
+              meta.subroomId === currentSubroomId &&
+              client.readyState === WebSocket.OPEN
+            ) {
               client.send(JSON.stringify(message));
             }
           });
@@ -164,16 +289,26 @@ export async function registerRoutes(
 
     ws.on('close', async () => {
       if (currentSubroomId) {
-        await storage.removeParticipant(socketId);
         wss.clients.forEach(client => {
-          if (client.readyState === WebSocket.OPEN) {
+          const meta = socketMeta.get(client);
+          if (
+            meta &&
+            meta.subroomId === currentSubroomId &&
+            client.readyState === WebSocket.OPEN
+          ) {
             client.send(JSON.stringify({
               type: 'user-left',
-              payload: { socketId, username: currentUsername }
+              payload: { socketId, username: currentUsername, peerId: currentPeerId }
             }));
           }
         });
       }
+      socketMeta.delete(ws);
+      wsLiveness.delete(ws);
+    });
+
+    ws.on("error", () => {
+      wsLiveness.delete(ws);
     });
   });
 

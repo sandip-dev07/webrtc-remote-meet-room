@@ -1,31 +1,49 @@
 import React, { useEffect, useRef } from 'react';
 import { MicOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { CameraBlurMode } from '@/store/meeting-store';
 
 interface VideoPlayerProps {
   stream: MediaStream | null;
   username: string;
   isLocal?: boolean;
   muted?: boolean;
+  blurMode?: CameraBlurMode;
+  aspect?: "video" | "square";
   className?: string;
 }
 
-export function VideoPlayer({ stream, username, isLocal = false, muted = false, className }: VideoPlayerProps) {
+export function VideoPlayer({
+  stream,
+  username,
+  isLocal = false,
+  muted = false,
+  blurMode = "none",
+  aspect = "video",
+  className,
+}: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const hasVideo = Boolean(
+    stream?.getVideoTracks().some(track => track.enabled && track.readyState === "live")
+  );
+  const hasAudio = Boolean(
+    stream?.getAudioTracks().some(track => track.enabled && track.readyState === "live")
+  );
 
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
     }
-  }, [stream]);
-
-  // Check if audio track is enabled
-  const hasAudio = stream?.getAudioTracks()[0]?.enabled ?? false;
-  // Check if video track is enabled
-  const hasVideo = stream?.getVideoTracks()[0]?.enabled ?? false;
+  }, [stream, hasVideo]);
 
   return (
-    <div className={cn("relative rounded-2xl overflow-hidden bg-card/80 border border-white/5 shadow-xl group", className)}>
+    <div
+      className={cn(
+        "relative rounded-2xl overflow-hidden bg-card/80 border border-white/5 shadow-xl group",
+        aspect === "square" ? "aspect-square" : "aspect-video",
+        className,
+      )}
+    >
       {hasVideo ? (
         <video
           ref={videoRef}
@@ -34,6 +52,8 @@ export function VideoPlayer({ stream, username, isLocal = false, muted = false, 
           muted={isLocal || muted}
           className={cn(
             "w-full h-full object-cover transition-transform duration-500",
+            blurMode === "light" && "blur-[2px] scale-[1.02]",
+            blurMode === "strong" && "blur-[5px] scale-[1.03]",
             isLocal && "scale-x-[-1]" // Mirror local video
           )}
         />
