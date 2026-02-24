@@ -31,6 +31,17 @@ export default function Meeting() {
     ws
   } = useWebRTC({ roomId, subroomId, username });
 
+  // Calculate dynamic grid layout based on participant count
+  const participantCount = Object.keys(peers).length + 1; // +1 for local
+  
+  const gridClass = useMemo(() => {
+    if (participantCount === 1) return "grid-cols-1";
+    if (participantCount === 2) return "grid-cols-1 md:grid-cols-2";
+    if (participantCount <= 4) return "grid-cols-2";
+    if (participantCount <= 6) return "grid-cols-2 md:grid-cols-3";
+    return "grid-cols-2 md:grid-cols-3 lg:grid-cols-4";
+  }, [participantCount]);
+
   // If missing username, kick to home
   if (!username) {
     setLocation("/");
@@ -48,17 +59,6 @@ export default function Meeting() {
       </div>
     );
   }
-
-  // Calculate dynamic grid layout based on participant count
-  const participantCount = Object.keys(peers).length + 1; // +1 for local
-  
-  const gridClass = useMemo(() => {
-    if (participantCount === 1) return "grid-cols-1";
-    if (participantCount === 2) return "grid-cols-1 md:grid-cols-2";
-    if (participantCount <= 4) return "grid-cols-2";
-    if (participantCount <= 6) return "grid-cols-2 md:grid-cols-3";
-    return "grid-cols-2 md:grid-cols-3 lg:grid-cols-4";
-  }, [participantCount]);
 
   const handleLeave = () => {
     if (localStream) {
