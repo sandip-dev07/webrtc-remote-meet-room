@@ -13,7 +13,10 @@ export const api = {
     create: {
       method: 'POST' as const,
       path: '/api/rooms' as const,
-      input: z.object({ hostUsername: z.string() }),
+      input: z.object({
+        hostUsername: z.string().min(1),
+        organizationName: z.string().min(2),
+      }),
       responses: {
         201: z.custom<typeof rooms.$inferSelect>(),
         400: errorSchemas.validation,

@@ -137,12 +137,14 @@ function MeetingFooter({
   onLeave,
 }: MeetingFooterProps) {
   return (
-    <footer className="h-20 sm:h-24 bg-black/50 backdrop-blur-xl border-t border-white/10 flex items-center justify-between px-2 sm:px-6 lg:px-12 z-30">
-      <div className="hidden md:block w-1/3">
-        <p className="text-white/50 text-sm hidden md:block">{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} | {subroomName}</p>
+    <footer className="h-20 sm:h-24 bg-black/50 backdrop-blur-xl border-t border-white/10 flex items-center justify-between px-2 sm:px-4 lg:px-8 z-30">
+      <div className="hidden xl:block flex-1 min-w-0">
+        <p className="text-white/50 text-sm truncate">
+          {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} | {subroomName}
+        </p>
       </div>
 
-      <div className="flex items-center justify-center gap-2 sm:gap-3 w-full md:w-1/3">
+      <div className="flex items-center justify-center gap-1.5 sm:gap-2.5 w-full xl:flex-1 min-w-0">
         <Button
           onClick={onToggleMic}
           variant={isMicOn ? "secondary" : "destructive"}
@@ -187,7 +189,7 @@ function MeetingFooter({
 
         <Button
           onClick={onToggleChat}
-          variant={isChatOpen ? "secondary" : "ghost"}
+          variant={isChatOpen ? "secondary" : "default"}
           size="icon"
           className={`md:hidden w-10 h-10 rounded-full hover:bg-white/10 ${isChatOpen ? 'bg-white/10 text-primary' : 'text-white'}`}
         >
@@ -199,19 +201,19 @@ function MeetingFooter({
         <Button
           onClick={onLeave}
           variant="destructive"
-          className="px-3 sm:px-6 h-10 sm:h-12 rounded-full font-medium hover:bg-red-600 hover:scale-105 transition-transform shadow-lg shadow-red-500/20"
+          className="px-3 sm:px-5 h-10 sm:h-12 rounded-full font-medium hover:bg-red-600 hover:scale-105 transition-transform shadow-lg shadow-red-500/20"
         >
           <PhoneOff size={18} className="sm:mr-2" />
           <span className="hidden sm:inline">Leave</span>
         </Button>
       </div>
 
-      <div className="hidden md:flex w-1/3 justify-end">
+      <div className="hidden xl:flex flex-1 justify-end">
         <Button
           onClick={onToggleChat}
           variant={isChatOpen ? "secondary" : "ghost"}
           size="icon"
-          className={`w-12 h-12 rounded-full hover:bg-white/10 ${isChatOpen ? 'bg-white/10 text-primary' : 'text-white'}`}
+          className={`w-12 h-12 rounded-full hover:bg-white/10 ${isChatOpen ? 'bg-white/10 text-primary' : 'text-white bg-sky-500'}`}
         >
           <MessageSquare size={20} />
         </Button>
@@ -259,7 +261,7 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
 
   // Calculate dynamic grid layout based on participant count
   const participantCount = Object.keys(peers).length + 1; // +1 for local
-  const tileAspect: "video" | "square" = "video";
+  const tileAspect: "video" | "square" | "auto" = participantCount === 1 ? "auto" : "video";
   const participantTiles = [
     {
       key: "local",
@@ -284,11 +286,11 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
   const gridClass = useMemo(() => {
     if (participantCount === 1) return "grid-cols-1";
     if (participantCount === 2) return "grid-cols-1 md:grid-cols-2";
-    if (participantCount === 3) return "grid-cols-1 md:grid-cols-3";
-    if (participantCount === 4) return "grid-cols-2";
-    if (participantCount <= 6) return "grid-cols-2 md:grid-cols-3";
-    if (participantCount <= 9) return "grid-cols-2 md:grid-cols-3 lg:grid-cols-4";
-    return "grid-cols-2 md:grid-cols-3 lg:grid-cols-4";
+    if (participantCount === 3) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
+    if (participantCount === 4) return "grid-cols-1 sm:grid-cols-2";
+    if (participantCount <= 6) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
+    if (participantCount <= 9) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
+    return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
   }, [participantCount]);
 
   // If missing username, kick to home
@@ -417,7 +419,7 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
                 muted={tile.muted}
                 blurMode={tile.blurMode}
                 aspect={tile.aspect}
-                className=""
+                className={participantCount === 1 ? "h-full max-h-full" : ""}
               />
             ))}
 

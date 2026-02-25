@@ -3,7 +3,8 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 export const rooms = pgTable("rooms", {
-  id: text("id").primaryKey(), // e.g., "123ahdcx"
+  id: text("id").primaryKey(),
+  organizationName: text("organization_name").notNull().unique(),
   hostUsername: text("host_username").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });

@@ -13,12 +13,16 @@ export default function Home() {
   const { username, setUsername } = useMeetingStore();
   const { toast } = useToast();
   const createRoom = useCreateRoom();
-  const prefilledRoomId = useMemo(
-    () => new URLSearchParams(search).get("roomId") ?? "",
+  const prefilledOrganization = useMemo(
+    () =>
+      new URLSearchParams(search).get("organization") ??
+      new URLSearchParams(search).get("roomId") ??
+      "",
     [search],
   );
   
-  const [roomId, setRoomId] = useState(prefilledRoomId);
+  const [organizationName, setOrganizationName] = useState("");
+  const [organizationToJoin, setOrganizationToJoin] = useState(prefilledOrganization);
   const [createName, setCreateName] = useState(username);
   const [joinName, setJoinName] = useState(username);
   const inputClassName =
@@ -29,30 +33,59 @@ export default function Home() {
     "h-12 rounded-xl text-base font-semibold bg-white/5 border border-white/20 hover:bg-white/10 transition-colors";
 
   const handleCreate = async () => {
-    if (!createName.trim()) {
-      toast({ title: "Name required", description: "Please enter your name to continue.", variant: "destructive" });
+    if (!createName.trim() || !organizationName.trim()) {
+      toast({
+        title: "Fields required",
+        description: "Please enter your name and organization name.",
+        variant: "destructive",
+      });
       return;
     }
     
     setUsername(createName.trim());
     
     try {
-      const room = await createRoom.mutateAsync(createName.trim());
+      const room = await createRoom.mutateAsync({
+        hostUsername: createName.trim(),
+        organizationName: organizationName.trim(),
+      });
       setLocation(`/room/${room.id}`);
-      toast({ title: "Room Created", description: `Main room ${room.id} is ready.` });
+      toast({ title: "Room Created", description: `${room.organizationName} is ready.` });
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     }
   };
 
+  const toOrganizationKey = (value: string): string =>
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64);
+
   const handleJoin = () => {
-    if (!joinName.trim() || !roomId.trim()) {
-      toast({ title: "Fields required", description: "Please enter both joining name and Room ID.", variant: "destructive" });
+    if (!joinName.trim() || !organizationToJoin.trim()) {
+      toast({
+        title: "Fields required",
+        description: "Please enter both joining name and organization name.",
+        variant: "destructive",
+      });
       return;
     }
     
+    const organizationKey = toOrganizationKey(organizationToJoin);
+    if (!organizationKey) {
+      toast({
+        title: "Invalid organization",
+        description: "Organization must include letters or numbers.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setUsername(joinName.trim());
-    setLocation(`/room/${roomId.trim()}`);
+    setLocation(`/room/${organizationKey}`);
   };
 
   return (
@@ -88,6 +121,15 @@ export default function Home() {
               className={inputClassName}
             />
           </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground/80 ml-1">Organization Name</label>
+            <Input
+              value={organizationName}
+              onChange={(e) => setOrganizationName(e.target.value)}
+              placeholder="Acme Corp"
+              className={inputClassName}
+            />
+          </div>
 
           <div className="space-y-6">
             <Button 
@@ -116,9 +158,9 @@ export default function Home() {
               />
               <div className="flex gap-3">
                 <Input 
-                  value={roomId}
-                  onChange={(e) => setRoomId(e.target.value)}
-                  placeholder="Enter Room ID" 
+                  value={organizationToJoin}
+                  onChange={(e) => setOrganizationToJoin(e.target.value)}
+                  placeholder="Enter Organization Name" 
                   className={`${inputClassName} flex-1`}
                   onKeyDown={(e) => e.key === 'Enter' && handleJoin()}
                 />

@@ -6,41 +6,88 @@ import { z } from "zod";
 import { WebSocketServer, WebSocket } from "ws";
 import crypto from "crypto";
 import type { Message } from "@shared/schema";
+import { createMediasoupService, type SocketMeta } from "./mediasoup-service";
 
 function generateId() {
-  return crypto.randomBytes(4).toString('hex');
+  return crypto.randomBytes(4).toString("hex");
+}
+
+function toOrganizationKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
 }
 
 export async function registerRoutes(
   httpServer: Server,
-  app: Express
+  app: Express,
 ): Promise<Server> {
-  const socketMeta = new Map<
-    WebSocket,
-    {
-      socketId: string;
-      roomId: string;
-      subroomId: string;
-      username: string;
-      peerId: string;
-      joinedAt: Date;
-    }
-  >();
+  const socketMeta = new Map<WebSocket, SocketMeta>();
+  const mediasoupService = await createMediasoupService();
+  const socketMedia = mediasoupService.socketMedia;
+
   const transientMessagesBySubroom = new Map<string, Message[]>();
   let transientMessageId = 1;
   const MAX_TRANSIENT_MESSAGES_PER_SUBROOM = 100;
-  
+
+  const sendJson = (ws: WebSocket, payload: unknown) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
+    }
+  };
+
+  const broadcastToSubroom = (
+    subroomId: string,
+    payload: unknown,
+    exclude?: WebSocket,
+  ) => {
+    socketMeta.forEach((meta, client) => {
+      if (
+        !meta ||
+        meta.subroomId !== subroomId ||
+        client === exclude ||
+        client.readyState !== WebSocket.OPEN
+      ) {
+        return;
+      }
+      client.send(JSON.stringify(payload));
+    });
+  };
+
   app.post(api.rooms.create.path, async (req, res) => {
     try {
       const input = api.rooms.create.input.parse(req.body);
-      const id = generateId(); // simple random id
-      const room = await storage.createRoom({ ...input, id });
+      const organizationName = input.organizationName.trim();
+      const id = toOrganizationKey(organizationName);
+      if (!id) {
+        return res.status(400).json({
+          message: "Organization name must include letters or numbers",
+          field: "organizationName",
+        });
+      }
+
+      const existing = await storage.getRoom(id);
+      if (existing) {
+        return res.status(400).json({
+          message: "Organization already exists",
+          field: "organizationName",
+        });
+      }
+
+      const room = await storage.createRoom({
+        id,
+        organizationName,
+        hostUsername: input.hostUsername.trim(),
+      });
       res.status(201).json(room);
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
           message: err.errors[0].message,
-          field: err.errors[0].path.join('.'),
+          field: err.errors[0].path.join("."),
         });
       }
       res.status(500).json({ message: "Internal server error" });
@@ -98,7 +145,7 @@ export async function registerRoutes(
       if (err instanceof z.ZodError) {
         return res.status(400).json({
           message: err.errors[0].message,
-          field: err.errors[0].path.join('.'),
+          field: err.errors[0].path.join("."),
         });
       }
       res.status(500).json({ message: "Internal server error" });
@@ -133,11 +180,10 @@ export async function registerRoutes(
     res.status(200).json(messages);
   });
 
-  // Setup WebSocket server for signaling and chat
   const wss = new WebSocketServer({
     server: httpServer,
-    path: '/ws',
-    maxPayload: 16 * 1024,
+    path: "/ws",
+    maxPayload: 16 * 1024, // 16kb
   });
 
   const HEARTBEAT_MS = 30000;
@@ -161,80 +207,81 @@ export async function registerRoutes(
     clearInterval(heartbeatInterval);
   });
 
-  wss.on('connection', (ws, req) => {
+  wss.on("connection", (ws) => {
     const socketId = crypto.randomUUID();
     let currentSubroomId: string | null = null;
     let currentUsername: string | null = null;
-    let currentPeerId: string | null = null;
 
     wsLiveness.set(ws, true);
+    socketMedia.set(ws, mediasoupService.createPeerMediaState());
+
     ws.on("pong", () => {
       wsLiveness.set(ws, true);
     });
 
-    ws.on('message', async (data) => {
+    ws.on("message", async (rawData) => {
       try {
-        const message = JSON.parse(data.toString());
-        
-        if (message.type === 'join') {
-          const { roomId, subroomId, username, peerId } = message.payload;
-          
+        const message = JSON.parse(rawData.toString());
+
+        if (message.type === "join") {
+          const { roomId, subroomId, username } = message.payload;
+
           const subroom = await storage.getSubroom(subroomId);
           if (!subroom) {
-            ws.send(JSON.stringify({ type: 'error', payload: { message: "Subroom not found" } }));
+            sendJson(ws, { type: "error", payload: { message: "Subroom not found" } });
             return;
           }
           if (subroom.roomId !== roomId) {
-            ws.send(JSON.stringify({ type: 'error', payload: { message: "Subroom does not belong to this room" } }));
+            sendJson(ws, {
+              type: "error",
+              payload: { message: "Subroom does not belong to this room" },
+            });
             return;
           }
 
           const activeCount = Array.from(socketMeta.values()).filter(
-            (meta) => meta.subroomId === subroomId
+            (meta) => meta.subroomId === subroomId,
           ).length;
           if (activeCount >= 10) {
-            ws.send(JSON.stringify({ type: 'error', payload: { message: "Subroom is full (max 10 participants)" } }));
+            sendJson(ws, {
+              type: "error",
+              payload: { message: "Subroom is full (max 10 participants)" },
+            });
             return;
           }
 
-          // If this socket is rejoining a different subroom, leave previous one first.
           if (currentSubroomId && currentSubroomId !== subroomId) {
-            wss.clients.forEach(client => {
-              const meta = socketMeta.get(client);
-              if (
-                meta &&
-                meta.subroomId === currentSubroomId &&
-                client.readyState === WebSocket.OPEN
-              ) {
-                client.send(JSON.stringify({
-                  type: 'user-left',
-                  payload: { socketId, username: currentUsername, peerId: currentPeerId }
-                }));
-              }
+            mediasoupService.closePeerMedia(ws, currentSubroomId, broadcastToSubroom);
+            broadcastToSubroom(currentSubroomId, {
+              type: "user-left",
+              payload: { socketId, username: currentUsername },
             });
           }
 
           currentSubroomId = subroomId;
           currentUsername = username;
-          currentPeerId = peerId;
-          socketMeta.set(ws, { socketId, roomId, subroomId, username, peerId, joinedAt: new Date() });
 
-          // Broadcast to others in the same subroom only.
-          wss.clients.forEach(client => {
-            const meta = socketMeta.get(client);
-            if (
-              client !== ws &&
-              meta &&
-              meta.subroomId === subroomId &&
-              client.readyState === WebSocket.OPEN
-            ) {
-              client.send(JSON.stringify({
-                type: 'user-joined',
-                payload: { username, peerId, socketId }
-              }));
-            }
+          socketMeta.set(ws, {
+            socketId,
+            roomId,
+            subroomId,
+            username,
+            joinedAt: new Date(),
           });
-        } else if (message.type === 'chat') {
+
+          sendJson(ws, { type: "joined", payload: { socketId } });
+          broadcastToSubroom(
+            subroomId,
+            {
+              type: "user-joined",
+              payload: { socketId, username },
+            },
+            ws,
+          );
+          return;
+        }
+
+        if (message.type === "chat") {
           if (currentSubroomId && currentUsername) {
             const { content } = message.payload;
             const transientMessage: Message = {
@@ -252,64 +299,52 @@ export async function registerRoutes(
             }
             transientMessagesBySubroom.set(currentSubroomId, existing);
 
-            wss.clients.forEach(client => {
-              const meta = socketMeta.get(client);
-              if (
-                meta &&
-                meta.subroomId === currentSubroomId &&
-                client.readyState === WebSocket.OPEN
-              ) {
-                client.send(JSON.stringify({
-                  type: 'chat',
-                  payload: transientMessage
-                }));
-              }
+            broadcastToSubroom(currentSubroomId, {
+              type: "chat",
+              payload: transientMessage,
             });
           }
-        } else if (message.type === 'signal') {
-          // Relay signaling data for WebRTC
-          // Broadcast only within the current subroom to keep isolation strict.
-          if (!currentSubroomId) return;
-          wss.clients.forEach(client => {
-            const meta = socketMeta.get(client);
-            if (
-              client !== ws &&
-              meta &&
-              meta.subroomId === currentSubroomId &&
-              client.readyState === WebSocket.OPEN
-            ) {
-              client.send(JSON.stringify(message));
-            }
+          return;
+        }
+
+        if (message.type === "ms-request") {
+          await mediasoupService.handleRequest({
+            ws,
+            message,
+            currentSubroomId,
+            currentUsername,
+            socketId,
+            socketMeta,
+            sendJson,
+            broadcastToSubroom,
           });
+          return;
         }
       } catch (e) {
         console.error("WS error:", e);
       }
     });
 
-    ws.on('close', async () => {
+    ws.on("close", () => {
       if (currentSubroomId) {
-        wss.clients.forEach(client => {
-          const meta = socketMeta.get(client);
-          if (
-            meta &&
-            meta.subroomId === currentSubroomId &&
-            client.readyState === WebSocket.OPEN
-          ) {
-            client.send(JSON.stringify({
-              type: 'user-left',
-              payload: { socketId, username: currentUsername, peerId: currentPeerId }
-            }));
-          }
+        mediasoupService.closePeerMedia(ws, currentSubroomId, broadcastToSubroom);
+        broadcastToSubroom(currentSubroomId, {
+          type: "user-left",
+          payload: { socketId, username: currentUsername },
         });
       }
       socketMeta.delete(ws);
+      socketMedia.delete(ws);
       wsLiveness.delete(ws);
     });
 
     ws.on("error", () => {
       wsLiveness.delete(ws);
     });
+  });
+
+  httpServer.on("close", async () => {
+    await mediasoupService.close();
   });
 
   return httpServer;

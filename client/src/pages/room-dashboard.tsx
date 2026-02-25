@@ -58,7 +58,7 @@ export default function RoomDashboard() {
 
   // If user navigated directly here without a name, send them back
   if (!username) {
-    setLocation(`/?roomId=${encodeURIComponent(roomId)}`);
+    setLocation(`/?organization=${encodeURIComponent(roomId)}`);
     return null;
   }
 
@@ -108,7 +108,7 @@ export default function RoomDashboard() {
     navigator.clipboard.writeText(roomId);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-    toast({ title: "Copied!", description: "Room ID copied to clipboard." });
+    toast({ title: "Copied!", description: "Organization key copied to clipboard." });
   };
 
   return (
@@ -139,7 +139,7 @@ export default function RoomDashboard() {
 
             <div className="flex items-center gap-2 sm:gap-3 bg-black/30 p-2 rounded-xl border border-white/5 max-w-full">
               <span className="text-xs sm:text-sm font-mono text-muted-foreground pl-2 sm:pl-3 truncate">
-                ID: {roomId}
+                Org: {data?.room?.organizationName || roomId}
               </span>
               <Button
                 variant="ghost"
@@ -160,7 +160,7 @@ export default function RoomDashboard() {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-semibold flex items-center gap-2">
-                Available Subrooms{" "}
+                Cabins{" "}
                 <span className="bg-secondary text-xs px-2 py-0.5 rounded-full">
                   {subrooms.length}/3
                 </span>

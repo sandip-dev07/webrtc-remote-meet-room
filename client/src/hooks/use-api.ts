@@ -19,8 +19,8 @@ export function useRoom(roomId: string) {
 
 export function useCreateRoom() {
   return useMutation({
-    mutationFn: async (hostUsername: string) => {
-      const payload = api.rooms.create.input.parse({ hostUsername });
+    mutationFn: async (input: { hostUsername: string; organizationName: string }) => {
+      const payload = api.rooms.create.input.parse(input);
       const res = await fetch(api.rooms.create.path, {
         method: api.rooms.create.method,
         headers: { 'Content-Type': 'application/json' },

@@ -1,15 +1,20 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import Peer, { MediaConnection } from 'peerjs';
-import { useMeetingStore } from '@/store/meeting-store';
+import { useState, useEffect, useRef, useCallback } from "react";
+import type { Consumer, Device, Producer, Transport } from "mediasoup-client/types";
+import { useMeetingStore } from "@/store/meeting-store";
+import {
+  closeMediasoupSession,
+  consumeRemoteProducer,
+  initializeMediasoupSession,
+  produceOrReplaceTrack,
+} from "./mediasoup-session";
 import {
   SPEECH_AUDIO_CONSTRAINTS,
   canUseScreenShare,
   getAudioStream,
   getCameraStream,
   getDisplayStream,
-  optimizeAudioForCall,
-} from './webrtc-media';
-import { useTone } from './use-tone';
+} from "./webrtc-media";
+import { useTone } from "./use-tone";
 
 export type PeerState = {
   stream: MediaStream;
@@ -37,7 +42,28 @@ type UseWebRTCReturn = {
   ws: WebSocket | null;
 };
 
-export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseWebRTCReturn {
+type PendingRequest = {
+  resolve: (value: any) => void;
+  reject: (reason?: any) => void;
+};
+
+type ConsumerMeta = {
+  consumer: Consumer;
+  peerId: string;
+  username: string;
+  kind: "audio" | "video";
+};
+
+type PendingProducer = {
+  peerId: string;
+  username: string;
+};
+
+export function useWebRTC({
+  roomId,
+  subroomId,
+  username,
+}: UseWebRTCProps): UseWebRTCReturn {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [peers, setPeers] = useState<Record<string, PeerState>>({});
   const [isConnected, setIsConnected] = useState(false);
@@ -45,17 +71,29 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [canScreenShare, setCanScreenShare] = useState(false);
   const [, setMediaTick] = useState(0);
-  
-  const peerInstance = useRef<Peer | null>(null);
+
   const wsRef = useRef<WebSocket | null>(null);
-  const connectionsRef = useRef<Record<string, MediaConnection>>({});
-  const peersRef = useRef<Record<string, PeerState>>({});
+  const pendingRequestsRef = useRef<Map<string, PendingRequest>>(new Map());
+  const requestCounterRef = useRef(0);
+  const joinedRef = useRef(false);
+  const initializedRef = useRef(false);
+
+  const deviceRef = useRef<Device | null>(null);
+  const sendTransportRef = useRef<Transport | null>(null);
+  const recvTransportRef = useRef<Transport | null>(null);
+  const audioProducerRef = useRef<Producer | null>(null);
+  const videoProducerRef = useRef<Producer | null>(null);
+  const consumersByProducerRef = useRef<Map<string, ConsumerMeta>>(new Map());
+  const pendingProducersRef = useRef<Map<string, PendingProducer>>(new Map());
+  const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map());
+  const remoteUsernamesRef = useRef<Map<string, string>>(new Map());
+
   const isScreenSharingRef = useRef(false);
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
   const isScreenShareTransitioningRef = useRef(false);
   const { playTone } = useTone();
-  
+
   const { isMicOn, isCamOn, setMic, setCam } = useMeetingStore();
 
   const playJoinTone = useCallback((): void => {
@@ -76,117 +114,170 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
     isScreenSharingRef.current = isScreenSharing;
   }, [isScreenSharing]);
 
-  useEffect(() => {
-    peersRef.current = peers;
-  }, [peers]);
+  const sendRequest = useCallback(async (action: string, data: any = {}) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      throw new Error("Signaling socket is not connected");
+    }
 
-  const addPeer = useCallback((peerId: string, stream: MediaStream, name: string): void => {
-    setPeers(prev => ({
+    const requestId = `req-${Date.now()}-${requestCounterRef.current++}`;
+    const payload = { type: "ms-request", requestId, action, data };
+    ws.send(JSON.stringify(payload));
+
+    return new Promise<any>((resolve, reject) => {
+      pendingRequestsRef.current.set(requestId, { resolve, reject });
+      window.setTimeout(() => {
+        if (pendingRequestsRef.current.has(requestId)) {
+          pendingRequestsRef.current.delete(requestId);
+          reject(new Error(`Timeout while waiting for '${action}'`));
+        }
+      }, 12000);
+    });
+  }, []);
+
+  const updatePeerState = useCallback((peerId: string, usernameForPeer: string) => {
+    const stream = remoteStreamsRef.current.get(peerId);
+    if (!stream || stream.getTracks().length === 0) {
+      remoteStreamsRef.current.delete(peerId);
+      remoteUsernamesRef.current.delete(peerId);
+      setPeers((prev) => {
+        const next = { ...prev };
+        delete next[peerId];
+        return next;
+      });
+      return;
+    }
+    remoteUsernamesRef.current.set(peerId, usernameForPeer);
+    setPeers((prev) => ({
       ...prev,
-      [peerId]: { stream, username: name }
+      [peerId]: { stream, username: usernameForPeer },
     }));
   }, []);
 
-  const removePeer = useCallback((peerId: string): void => {
-    setPeers(prev => {
-      const next = { ...prev };
-      delete next[peerId];
-      return next;
-    });
-  }, []);
+  const removeRemoteTrack = useCallback(
+    (producerId: string): void => {
+      const entry = consumersByProducerRef.current.get(producerId);
+      if (!entry) return;
 
-  // Attach remote stream + lifecycle handlers for a peer call.
-  const attachCallHandlers = useCallback((call: MediaConnection, remoteUsername: string): void => {
-    call.on('stream', (userVideoStream) => {
-      addPeer(call.peer, userVideoStream, remoteUsername);
-    });
+      const { consumer, peerId, username: remoteName } = entry;
+      consumersByProducerRef.current.delete(producerId);
+      consumer.close();
 
-    call.on('close', () => {
-      removePeer(call.peer);
-      if (connectionsRef.current[call.peer] === call) {
-        delete connectionsRef.current[call.peer];
+      const stream = remoteStreamsRef.current.get(peerId);
+      if (stream) {
+        stream.getTracks().forEach((track) => {
+          if (track.id === consumer.track.id) {
+            stream.removeTrack(track);
+            track.stop();
+          }
+        });
       }
+
+      updatePeerState(peerId, remoteName);
+    },
+    [updatePeerState],
+  );
+
+  const consumeProducer = useCallback(
+    async (producerId: string, peerId: string, producerUsername: string): Promise<void> => {
+      if (consumersByProducerRef.current.has(producerId)) return;
+      const recvTransport = recvTransportRef.current;
+      const device = deviceRef.current;
+      if (!recvTransport || !device) {
+        pendingProducersRef.current.set(producerId, {
+          peerId,
+          username: producerUsername,
+        });
+        return;
+      }
+
+      const consumed = await consumeRemoteProducer(
+        producerId,
+        sendRequest,
+        {
+          deviceRef,
+          sendTransportRef,
+          recvTransportRef,
+          audioProducerRef,
+          videoProducerRef,
+        },
+      );
+      if (!consumed) return;
+      const { consumer, kind } = consumed;
+
+      let stream = remoteStreamsRef.current.get(peerId);
+      if (!stream) {
+        stream = new MediaStream();
+        remoteStreamsRef.current.set(peerId, stream);
+      }
+      stream.addTrack(consumer.track);
+
+      consumersByProducerRef.current.set(producerId, {
+        consumer,
+        peerId,
+        username: producerUsername,
+        kind,
+      });
+      pendingProducersRef.current.delete(producerId);
+
+      consumer.on("transportclose", () => removeRemoteTrack(producerId));
+      // Do not tear down on trackended. During track replacement
+      // (camera <-> screen), browsers can emit transient ended states.
+      // We rely on explicit producer-closed notifications instead.
+
+      updatePeerState(peerId, producerUsername);
+    },
+    [removeRemoteTrack, sendRequest, updatePeerState],
+  );
+
+  const produceTrack = useCallback(
+    async (kind: "audio" | "video", track: MediaStreamTrack): Promise<void> => {
+      await produceOrReplaceTrack(kind, track, {
+        deviceRef,
+        sendTransportRef,
+        recvTransportRef,
+        audioProducerRef,
+        videoProducerRef,
+      });
+    },
+    [],
+  );
+
+  const setupMediasoup = useCallback(async (): Promise<void> => {
+    await initializeMediasoupSession({
+      initializedRef,
+      sendRequest,
+      refs: {
+        deviceRef,
+        sendTransportRef,
+        recvTransportRef,
+        audioProducerRef,
+        videoProducerRef,
+      },
+      localStream,
+      consumeProducer,
     });
-  }, [addPeer, removePeer]);
 
-  // Recreate call when sender-track replacement cannot be negotiated reliably.
-  const reconnectPeerWithStream = useCallback((remotePeerId: string, stream: MediaStream): void => {
-    if (!peerInstance.current) return;
-
-    const existingCall = connectionsRef.current[remotePeerId];
-    if (existingCall) {
-      existingCall.close();
-      delete connectionsRef.current[remotePeerId];
+    const pendingProducers = Array.from(pendingProducersRef.current.entries());
+    if (pendingProducers.length > 0) {
+      await Promise.all(
+        pendingProducers.map(([producerId, meta]) =>
+          consumeProducer(producerId, meta.peerId, meta.username),
+        ),
+      );
     }
-
-    const remoteUsername =
-      peersRef.current[remotePeerId]?.username || `User-${remotePeerId.substring(0, 4)}`;
-
-    const newCall = peerInstance.current.call(remotePeerId, stream, {
-      metadata: { username },
-    });
-
-    attachCallHandlers(newCall, remoteUsername);
-    optimizeAudioForCall(newCall);
-    connectionsRef.current[remotePeerId] = newCall;
-  }, [attachCallHandlers, optimizeAudioForCall, username]);
-
-  // Replace outbound video track across active peer connections.
-  const replaceOutgoingVideoTrack = useCallback((videoTrack: MediaStreamTrack, stream: MediaStream): void => {
-    Object.values(connectionsRef.current).forEach(call => {
-      const videoSender = call.peerConnection
-        .getSenders()
-        .find(sender => sender.track?.kind === 'video');
-
-      if (videoSender) {
-        void videoSender.replaceTrack(videoTrack);
-      } else {
-        // PeerJS does not renegotiate dynamically-added tracks reliably.
-        // Re-establish this call with current stream so remote peers receive updates.
-        reconnectPeerWithStream(call.peer, stream);
-      }
-    });
-  }, [reconnectPeerWithStream]);
-
-  // Generic sender-track replacement for audio/video.
-  const replaceOutgoingTrack = useCallback((track: MediaStreamTrack, stream: MediaStream): void => {
-    Object.values(connectionsRef.current).forEach(call => {
-      const sender = call.peerConnection
-        .getSenders()
-        .find(s => s.track?.kind === track.kind);
-
-      if (sender) {
-        void sender.replaceTrack(track);
-      } else {
-        reconnectPeerWithStream(call.peer, stream);
-      }
-    });
-  }, [reconnectPeerWithStream]);
-
-  // Place outgoing call to newly joined peer.
-  const connectToNewUser = useCallback((remotePeerId: string, remoteUsername: string, stream: MediaStream): void => {
-    if (!peerInstance.current) return;
-
-    const call = peerInstance.current.call(remotePeerId, stream, {
-      metadata: { username }
-    });
-
-    attachCallHandlers(call, remoteUsername);
-    optimizeAudioForCall(call);
-    connectionsRef.current[remotePeerId] = call;
-  }, [attachCallHandlers, optimizeAudioForCall, username]);
+  }, [consumeProducer, localStream, sendRequest]);
 
   // 1) Initialize local media stream with AV -> audio-only -> video-only fallback chain.
   useEffect(() => {
     let stream: MediaStream;
     const initMedia = async () => {
       const applyPreferences = (mediaStream: MediaStream) => {
-        mediaStream.getVideoTracks().forEach(track => (track.enabled = isCamOn));
-        mediaStream.getAudioTracks().forEach(track => (track.enabled = isMicOn));
+        mediaStream.getVideoTracks().forEach((track) => (track.enabled = isCamOn));
+        mediaStream.getAudioTracks().forEach((track) => (track.enabled = isMicOn));
       };
 
       try {
-        // Try full AV first.
         stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: SPEECH_AUDIO_CONSTRAINTS,
@@ -194,15 +285,12 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
       } catch (err) {
         console.warn("AV media access failed, trying fallback modes", err);
         try {
-          // Fallback 1: audio-only
           stream = await getAudioStream();
         } catch {
           try {
-            // Fallback 2: video-only
             stream = await getCameraStream();
           } catch (finalErr) {
             console.warn("Media fallback failed, joining without local tracks", finalErr);
-            // Do not block the room if media devices are unavailable.
             stream = new MediaStream();
           }
         }
@@ -221,17 +309,16 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
       }
       setLocalStream(stream);
     };
-    
-    initMedia();
-    
+
+    void initMedia();
+
     return () => {
       if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach((track) => track.stop());
       }
     };
-  }, [getAudioStream, getCameraStream]); // Only run once on mount, preferences applied via effect below
+  }, [getAudioStream, getCameraStream]);
 
-  // Ensure mic track exists when user enables mic (can be re-acquired after device loss).
   const ensureAudioTrack = useCallback(async (): Promise<boolean> => {
     if (!localStream) return false;
     const liveAudioTrack = localStream.getAudioTracks().find((track) => track.readyState === "live");
@@ -243,22 +330,19 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
       audioTrack.contentHint = "speech";
       audioTrack.enabled = isMicOn;
       localStream.addTrack(audioTrack);
-      replaceOutgoingTrack(audioTrack, localStream);
-      Object.values(connectionsRef.current).forEach((call) => optimizeAudioForCall(call));
+      await produceTrack("audio", audioTrack);
       return true;
     } catch (err) {
       console.error("Unable to acquire audio track", err);
       return false;
     }
-  }, [getAudioStream, isMicOn, localStream, optimizeAudioForCall, replaceOutgoingTrack]);
+  }, [getAudioStream, isMicOn, localStream, produceTrack]);
 
-  // Ensure camera track exists when user enables cam (except while screen sharing).
   const ensureCameraTrack = useCallback(async (): Promise<boolean> => {
     if (!localStream || isScreenSharingRef.current) return false;
     const liveVideoTrack = localStream.getVideoTracks().find((track) => track.readyState === "live");
     if (liveVideoTrack) return true;
     try {
-      // Remove stale/ended video tracks before reacquiring camera.
       localStream.getVideoTracks().forEach((track) => {
         if (track.readyState !== "live") {
           localStream.removeTrack(track);
@@ -278,22 +362,34 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
         }
       };
       localStream.addTrack(videoTrack);
-      replaceOutgoingTrack(videoTrack, localStream);
+      await produceTrack("video", videoTrack);
       setMediaTick((v) => v + 1);
       return true;
     } catch (err) {
       console.error("Unable to acquire video track", err);
       return false;
     }
-  }, [getCameraStream, isCamOn, localStream, replaceOutgoingTrack]);
+  }, [getCameraStream, isCamOn, localStream, produceTrack, setCam]);
 
   useEffect(() => {
-    if (localStream) {
-      localStream.getVideoTracks().forEach(track => {
-        track.enabled = isScreenSharing ? true : isCamOn;
-      });
-      localStream.getAudioTracks().forEach(track => (track.enabled = isMicOn));
+    if (!localStream) return;
+
+    localStream.getVideoTracks().forEach((track) => {
+      track.enabled = isScreenSharing ? true : isCamOn;
+    });
+    localStream.getAudioTracks().forEach((track) => (track.enabled = isMicOn));
+
+    const audioProducer = audioProducerRef.current;
+    const videoProducer = videoProducerRef.current;
+    if (audioProducer) {
+      if (isMicOn) audioProducer.resume();
+      else audioProducer.pause();
     }
+    if (videoProducer && !isScreenSharing) {
+      if (isCamOn) videoProducer.resume();
+      else videoProducer.pause();
+    }
+
     if (isMicOn) {
       void ensureAudioTrack();
     }
@@ -302,95 +398,130 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
     }
   }, [isMicOn, isCamOn, isScreenSharing, localStream, ensureAudioTrack, ensureCameraTrack]);
 
-  // 2) Initialize PeerJS + WebSocket signaling for the active room/subroom.
+  // 2) Initialize signaling + mediasoup for the active room/subroom.
   useEffect(() => {
     if (!localStream || !username) return;
 
-    // Initialize PeerJS
-    const peer = new Peer(); // Uses default PeerJS cloud server for demo
-    peerInstance.current = peer;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
 
-    peer.on('open', (peerId) => {
-      console.log('My peer ID is: ' + peerId);
-      
-      // Once we have a PeerID, connect to our WebSocket signaling server
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+    ws.onopen = () => {
+      setIsConnected(true);
+      setError(null);
+      ws.send(
+        JSON.stringify({
+          type: "join",
+          payload: { roomId, subroomId, username },
+        }),
+      );
+    };
 
-      ws.onopen = () => {
-        setIsConnected(true);
-        setError(null);
-        // Announce we joined
-        ws.send(JSON.stringify({
-          type: 'join',
-          payload: { roomId, subroomId, username, peerId }
-        }));
-      };
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
 
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          
-          if (data.type === 'user-joined') {
-            const { peerId: remotePeerId, username: remoteUsername } = data.payload;
-            if (remotePeerId !== peerId) {
-              playJoinTone();
-              connectToNewUser(remotePeerId, remoteUsername, localStream);
+        if (data.type === "ms-response") {
+          const requestId = String(data.requestId ?? "");
+          const pending = pendingRequestsRef.current.get(requestId);
+          if (!pending) return;
+          pendingRequestsRef.current.delete(requestId);
+          if (data.error) {
+            pending.reject(new Error(String(data.error)));
+          } else {
+            pending.resolve(data.data);
+          }
+          return;
+        }
+
+        if (data.type === "ms-notification") {
+          if (data.action === "new-producer") {
+            const { producerId, peerId, username: remoteUsername } = data.data || {};
+            if (producerId && peerId) {
+              void consumeProducer(producerId, peerId, remoteUsername || `User-${peerId.slice(0, 4)}`);
             }
           }
-          
-          if (data.type === 'user-left') {
-            const { peerId: remotePeerId } = data.payload;
-            if (connectionsRef.current[remotePeerId]) {
-              connectionsRef.current[remotePeerId].close();
-              delete connectionsRef.current[remotePeerId];
+          if (data.action === "producer-closed") {
+            const { producerId } = data.data || {};
+            if (producerId) {
+              pendingProducersRef.current.delete(producerId);
+              removeRemoteTrack(producerId);
             }
-            setPeers(prev => {
-              const next = { ...prev };
-              delete next[remotePeerId];
-              return next;
+          }
+          return;
+        }
+
+        if (data.type === "joined") {
+          if (!joinedRef.current) {
+            joinedRef.current = true;
+            void setupMediasoup().catch((err: any) => {
+              setError(`Connection error: ${err?.message || "Unable to start media session"}`);
             });
           }
-        } catch (e) {
-          console.error("WS message parse error", e);
         }
-      };
 
-      ws.onclose = () => setIsConnected(false);
-      ws.onerror = () => setIsConnected(false);
-    });
+        if (data.type === "user-joined") {
+          playJoinTone();
+        }
 
-    // Handle incoming calls
-    peer.on('call', (call) => {
-      // Answer the call, providing our mediaStream
-      call.answer(localStream);
-      
-      // Expect the caller's peer ID and metadata to include their username
-      // For simplicity in this demo, we might just use their peerId as username if metadata fails
-      const remoteUsername = call.metadata?.username || `User-${call.peer.substring(0,4)}`;
-      attachCallHandlers(call, remoteUsername);
-      optimizeAudioForCall(call);
-      
-      connectionsRef.current[call.peer] = call;
-    });
+        if (data.type === "user-left") {
+          const { socketId: remotePeerId } = data.payload || {};
+          if (!remotePeerId) return;
+          Array.from(pendingProducersRef.current.entries()).forEach(([producerId, meta]) => {
+            if (meta.peerId === remotePeerId) {
+              pendingProducersRef.current.delete(producerId);
+            }
+          });
+          const producerIds = Array.from(consumersByProducerRef.current.entries())
+            .filter(([, value]) => value.peerId === remotePeerId)
+            .map(([producerId]) => producerId);
+          producerIds.forEach((producerId) => removeRemoteTrack(producerId));
+        }
+      } catch (e) {
+        console.error("WS message parse error", e);
+      }
+    };
 
-    peer.on('error', (err) => {
-      console.error("PeerJS error:", err);
-      setError(`Connection error: ${err.message}`);
-    });
+    ws.onclose = () => {
+      setIsConnected(false);
+      pendingRequestsRef.current.forEach(({ reject }) => reject(new Error("Socket closed")));
+      pendingRequestsRef.current.clear();
+    };
 
-    return () => {
-      if (wsRef.current) wsRef.current.close();
-      if (peerInstance.current) peerInstance.current.destroy();
-      connectionsRef.current = {};
-      setPeers({});
+    ws.onerror = () => {
       setIsConnected(false);
     };
-  }, [attachCallHandlers, connectToNewUser, localStream, playJoinTone, roomId, subroomId, username]);
 
-  // Stop display capture and restore camera track when enabled.
+    return () => {
+      pendingRequestsRef.current.forEach(({ reject }) => reject(new Error("Session closed")));
+      pendingRequestsRef.current.clear();
+
+      consumersByProducerRef.current.forEach(({ consumer }) => consumer.close());
+      consumersByProducerRef.current.clear();
+      pendingProducersRef.current.clear();
+      remoteStreamsRef.current.forEach((stream) => stream.getTracks().forEach((t) => t.stop()));
+      remoteStreamsRef.current.clear();
+      remoteUsernamesRef.current.clear();
+      setPeers({});
+
+      closeMediasoupSession({
+        deviceRef,
+        sendTransportRef,
+        recvTransportRef,
+        audioProducerRef,
+        videoProducerRef,
+      });
+
+      initializedRef.current = false;
+      joinedRef.current = false;
+
+      if (wsRef.current) wsRef.current.close();
+      wsRef.current = null;
+      setIsConnected(false);
+    };
+  }, [consumeProducer, localStream, playJoinTone, removeRemoteTrack, roomId, setupMediasoup, subroomId, username]);
+
   const stopScreenShare = useCallback(async (): Promise<void> => {
     if (!localStream || isScreenShareTransitioningRef.current) return;
     isScreenShareTransitioningRef.current = true;
@@ -416,26 +547,29 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
           };
           videoTrack.enabled = true;
           localStream.addTrack(videoTrack);
-          replaceOutgoingVideoTrack(videoTrack, localStream);
+          await produceTrack("video", videoTrack);
+          videoProducerRef.current?.resume();
         } else {
           setCam(false);
+          videoProducerRef.current?.pause();
         }
+      } else {
+        videoProducerRef.current?.pause();
       }
 
       setIsScreenSharing(false);
       setMediaTick((v) => v + 1);
     } catch (err) {
       console.error("Error reverting to camera", err);
-      // Do not keep stale screen-share state if track is gone.
       setIsScreenSharing(false);
       setCam(false);
+      videoProducerRef.current?.pause();
       setMediaTick((v) => v + 1);
     } finally {
       isScreenShareTransitioningRef.current = false;
     }
-  }, [getCameraStream, isCamOn, localStream, replaceOutgoingVideoTrack, setCam]);
+  }, [getCameraStream, isCamOn, localStream, produceTrack, setCam]);
 
-  // Start display capture and broadcast it as the active outbound video track.
   const startScreenShare = useCallback(async (): Promise<void> => {
     if (!localStream || isScreenShareTransitioningRef.current || !canScreenShare) return;
     isScreenShareTransitioningRef.current = true;
@@ -454,14 +588,14 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
       const currentVideoTrack = localStream.getVideoTracks()[0];
       if (currentVideoTrack) {
         localStream.removeTrack(currentVideoTrack);
-        // Keep camera track for quick restore, but stop non-camera orphan tracks.
         if (currentVideoTrack !== cameraTrackRef.current) {
           currentVideoTrack.stop();
         }
       }
       localStream.addTrack(screenTrack);
 
-      replaceOutgoingVideoTrack(screenTrack, localStream);
+      await produceTrack("video", screenTrack);
+      videoProducerRef.current?.resume();
       setIsScreenSharing(true);
       setMediaTick((v) => v + 1);
     } catch (err) {
@@ -470,9 +604,8 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
     } finally {
       isScreenShareTransitioningRef.current = false;
     }
-  }, [canScreenShare, getDisplayStream, localStream, replaceOutgoingVideoTrack, stopScreenShare]);
+  }, [canScreenShare, getDisplayStream, localStream, produceTrack, stopScreenShare]);
 
-  // Toggle between camera and display capture.
   const toggleScreenShare = async (): Promise<boolean> => {
     if (isScreenSharingRef.current) {
       await stopScreenShare();
@@ -496,10 +629,13 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
         console.warn("Microphone unavailable. Please check browser permission/device.");
         return;
       }
+      audioProducerRef.current?.resume();
+    } else {
+      audioProducerRef.current?.pause();
     }
 
     setMic(nextMicOn);
-    localStream.getAudioTracks().forEach(track => {
+    localStream.getAudioTracks().forEach((track) => {
       track.enabled = nextMicOn;
     });
     setMediaTick((v) => v + 1);
@@ -512,7 +648,6 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
       return;
     }
 
-    // During screen share we only persist preference for post-share camera behavior.
     if (!isScreenSharingRef.current && nextCamOn) {
       const hasVideoTrack = await ensureCameraTrack();
       if (!hasVideoTrack) {
@@ -520,11 +655,14 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
         console.warn("Camera unavailable. Please check browser permission/device.");
         return;
       }
+      videoProducerRef.current?.resume();
+    } else if (!isScreenSharingRef.current && !nextCamOn) {
+      videoProducerRef.current?.pause();
     }
 
     setCam(nextCamOn);
     if (!isScreenSharingRef.current) {
-      localStream.getVideoTracks().forEach(track => {
+      localStream.getVideoTracks().forEach((track) => {
         track.enabled = nextCamOn;
       });
       setMediaTick((v) => v + 1);
@@ -532,9 +670,8 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
   }, [ensureCameraTrack, isCamOn, localStream, setCam]);
 
   const effectiveMicOn = Boolean(
-    localStream?.getAudioTracks().some(track => track.enabled && track.readyState === "live")
+    localStream?.getAudioTracks().some((track) => track.enabled && track.readyState === "live"),
   );
-  // Camera UI reflects camera preference, not temporary screen-share state.
   const effectiveCamOn = isCamOn;
 
   return {
@@ -549,6 +686,6 @@ export function useWebRTC({ roomId, subroomId, username }: UseWebRTCProps): UseW
     isScreenSharing,
     canScreenShare,
     toggleScreenShare,
-    ws: wsRef.current
+    ws: wsRef.current,
   };
 }

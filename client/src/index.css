@@ -81,6 +81,13 @@
   display: grid;
   gap: 1rem;
   transition: all 0.3s ease-in-out;
+  grid-auto-rows: minmax(180px, 1fr);
+}
+
+@media (max-height: 700px) {
+  .video-grid {
+    grid-auto-rows: minmax(150px, 1fr);
+  }
 }
 
 /* Elevate interaction styles */

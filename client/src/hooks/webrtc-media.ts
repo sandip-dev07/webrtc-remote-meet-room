@@ -1,5 +1,3 @@
-import type { MediaConnection } from "peerjs";
-
 export const SPEECH_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   echoCancellation: true,
   noiseSuppression: true,
@@ -26,11 +24,7 @@ export function canUseScreenShare(): boolean {
 }
 
 // Prioritize speech quality under unstable network conditions.
-export function optimizeAudioForCall(call: MediaConnection): void {
-  const audioSender = call.peerConnection
-    .getSenders()
-    .find((sender) => sender.track?.kind === "audio");
-
+export function optimizeAudioSender(audioSender: RTCRtpSender | undefined): void {
   if (!audioSender) return;
 
   const track = audioSender.track;
