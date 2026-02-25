@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import {
   Mic,
@@ -10,6 +10,8 @@ import {
   MessageSquare,
   Minimize2,
   Maximize2,
+  Pin,
+  PinOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useMeetingStore } from "@/store/meeting-store";
@@ -24,6 +26,16 @@ interface MeetingProps {
   subroomId: string;
   mode?: "full" | "mini";
 }
+
+type ParticipantTile = {
+  key: string;
+  stream: MediaStream | null;
+  username: string;
+  isLocal: boolean;
+  muted: boolean;
+  blurMode: "none" | "light" | "strong";
+  aspect: "video" | "square" | "auto";
+};
 
 interface MiniMeetingPanelProps {
   subroomName?: string;
@@ -236,6 +248,7 @@ export default function Meeting({
   const { toast } = useToast();
 
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [pinnedTileKey, setPinnedTileKey] = useState<string | null>(null);
 
   // Fetch subroom details just for the name
   const { data: subroomData, error: subroomError } = useSubroom(subroomId);
@@ -260,7 +273,7 @@ export default function Meeting({
   const participantCount = Object.keys(peers).length + 1; // +1 for local
   const tileAspect: "video" | "square" | "auto" =
     participantCount === 1 ? "auto" : "video";
-  const participantTiles = [
+  const participantTiles: ParticipantTile[] = [
     {
       key: "local",
       stream: localStream,
@@ -281,6 +294,14 @@ export default function Meeting({
     })),
   ];
 
+  useEffect(() => {
+    if (!pinnedTileKey) return;
+    const stillPresent = participantTiles.some((tile) => tile.key === pinnedTileKey);
+    if (!stillPresent) {
+      setPinnedTileKey(null);
+    }
+  }, [participantTiles, pinnedTileKey]);
+
   const gridClass = useMemo(() => {
     if (participantCount === 1) return "grid-cols-1";
     if (participantCount === 2) return "grid-cols-1 md:grid-cols-2";
@@ -289,6 +310,17 @@ export default function Meeting({
     if (participantCount <= 6) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
     return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
   }, [participantCount]);
+
+  const pinnedTile = pinnedTileKey
+    ? participantTiles.find((tile) => tile.key === pinnedTileKey) ?? null
+    : null;
+  const unpinnedTiles = pinnedTile
+    ? participantTiles.filter((tile) => tile.key !== pinnedTile.key)
+    : participantTiles;
+
+  const togglePinTile = (tileKey: string) => {
+    setPinnedTileKey((current) => (current === tileKey ? null : tileKey));
+  };
 
   // If missing username, kick to home
   if (!username) {
@@ -420,20 +452,84 @@ export default function Meeting({
         <div
           className={`flex-1 p-2 sm:p-4 lg:p-5 transition-all duration-300 ${isChatOpen ? "mr-0" : ""}`}
         >
-          <div className={`w-full h-full video-grid ${gridClass} gap-3`}>
-            {participantTiles.map((tile) => (
-              <VideoPlayer
-                key={tile.key}
-                stream={tile.stream}
-                username={tile.username}
-                isLocal={tile.isLocal}
-                muted={tile.muted}
-                blurMode={tile.blurMode}
-                aspect={tile.aspect}
-                className={participantCount === 1 ? "h-full max-h-full" : ""}
-              />
-            ))}
-          </div>
+          {pinnedTile ? (
+            <div className="h-full min-h-0 flex flex-col lg:flex-row gap-3">
+              <div className="flex-1 min-h-[300px] lg:min-h-0 relative">
+                <VideoPlayer
+                  stream={pinnedTile.stream}
+                  username={pinnedTile.username}
+                  isLocal={pinnedTile.isLocal}
+                  muted={pinnedTile.muted}
+                  blurMode={pinnedTile.blurMode}
+                  aspect="auto"
+                  className="h-full max-h-full"
+                />
+                <Button
+                  onClick={() => togglePinTile(pinnedTile.key)}
+                  variant="secondary"
+                  size="icon"
+                  className="absolute top-3 right-3 h-8 w-8 rounded-lg bg-black/50 border border-white/15 hover:bg-black/70"
+                  title="Unpin"
+                >
+                  <PinOff size={14} />
+                </Button>
+              </div>
+
+              {unpinnedTiles.length > 0 && (
+                <div className="w-full lg:w-[320px] shrink-0 flex lg:flex-col gap-3 overflow-x-auto lg:overflow-y-auto lg:overflow-x-hidden pb-1">
+                  {unpinnedTiles.map((tile) => (
+                    <div key={tile.key} className="min-w-[220px] lg:min-w-0 relative">
+                      <VideoPlayer
+                        stream={tile.stream}
+                        username={tile.username}
+                        isLocal={tile.isLocal}
+                        muted={tile.muted}
+                        blurMode={tile.blurMode}
+                        aspect="video"
+                        className="h-full"
+                      />
+                      <Button
+                        onClick={() => togglePinTile(tile.key)}
+                        variant="secondary"
+                        size="icon"
+                        className="absolute top-2 right-2 h-7 w-7 rounded-lg bg-black/50 border border-white/15 hover:bg-black/70"
+                        title="Pin to large view"
+                      >
+                        <Pin size={13} />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className={`w-full h-full video-grid ${gridClass} gap-3`}>
+              {participantTiles.map((tile) => (
+                <div key={tile.key} className="relative">
+                  <VideoPlayer
+                    stream={tile.stream}
+                    username={tile.username}
+                    isLocal={tile.isLocal}
+                    muted={tile.muted}
+                    blurMode={tile.blurMode}
+                    aspect={tile.aspect}
+                    className={participantCount === 1 ? "h-full max-h-full" : ""}
+                  />
+                  {participantCount > 1 && (
+                    <Button
+                      onClick={() => togglePinTile(tile.key)}
+                      variant="secondary"
+                      size="icon"
+                      className="absolute top-3 right-3 h-8 w-8 rounded-lg bg-black/50 border border-white/15 hover:bg-black/70"
+                      title="Pin to large view"
+                    >
+                      <Pin size={14} />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Sidebar overlay container for mobile, inline for desktop */}
