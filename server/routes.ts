@@ -26,6 +26,7 @@ export async function registerRoutes(
   app: Express,
 ): Promise<Server> {
   const socketMeta = new Map<WebSocket, SocketMeta>();
+  const socketRoomSubscriptions = new Map<WebSocket, string>();
   const mediasoupService = await createMediasoupService();
   const socketMedia = mediasoupService.socketMedia;
 
@@ -104,19 +105,20 @@ export async function registerRoutes(
   });
 
   app.get(api.rooms.participantCounts.path, async (req, res) => {
-    const room = await storage.getRoom(req.params.id);
+    const roomId = req.params.id;
+    const room = await storage.getRoom(roomId);
     if (!room) {
       return res.status(404).json({ message: "Room not found" });
     }
 
-    const subrooms = await storage.getSubroomsByRoom(room.id);
+    const subrooms = await storage.getSubroomsByRoom(roomId);
     const counts = subrooms.reduce<Record<string, number>>((acc, subroom) => {
       acc[subroom.id] = 0;
       return acc;
     }, {});
 
     Array.from(socketMeta.values()).forEach((meta) => {
-      if (counts[meta.subroomId] !== undefined) {
+      if (meta.roomId === roomId && counts[meta.subroomId] !== undefined) {
         counts[meta.subroomId] += 1;
       }
     });
@@ -186,6 +188,46 @@ export async function registerRoutes(
     maxPayload: 16 * 1024, // 16kb
   });
 
+  const buildParticipantCountsForRoom = async (
+    roomId: string,
+  ): Promise<Record<string, number> | null> => {
+    const room = await storage.getRoom(roomId);
+    if (!room) return null;
+
+    const subrooms = await storage.getSubroomsByRoom(roomId);
+    const counts = subrooms.reduce<Record<string, number>>((acc, subroom) => {
+      acc[subroom.id] = 0;
+      return acc;
+    }, {});
+
+    socketMeta.forEach((meta) => {
+      if (meta.roomId === roomId && counts[meta.subroomId] !== undefined) {
+        counts[meta.subroomId] += 1;
+      }
+    });
+
+    return counts;
+  };
+
+  const emitParticipantCountsUpdate = async (roomId: string) => {
+    const counts = await buildParticipantCountsForRoom(roomId);
+    if (!counts) return;
+
+    const payload = JSON.stringify({
+      type: "participant-counts-updated",
+      payload: { roomId, counts },
+    });
+
+    wss.clients.forEach((client) => {
+      if (client.readyState !== WebSocket.OPEN) return;
+      const meta = socketMeta.get(client);
+      const watchedRoomId = socketRoomSubscriptions.get(client);
+      if ((meta && meta.roomId === roomId) || watchedRoomId === roomId) {
+        client.send(payload);
+      }
+    });
+  };
+
   const HEARTBEAT_MS = 30000;
   const wsLiveness = new Map<WebSocket, boolean>();
 
@@ -209,6 +251,7 @@ export async function registerRoutes(
 
   wss.on("connection", (ws) => {
     const socketId = crypto.randomUUID();
+    let currentRoomId: string | null = null;
     let currentSubroomId: string | null = null;
     let currentUsername: string | null = null;
 
@@ -223,8 +266,32 @@ export async function registerRoutes(
       try {
         const message = JSON.parse(rawData.toString());
 
+        if (message.type === "watch-room") {
+          const roomId = String(message.payload?.roomId || "");
+          if (!roomId) {
+            sendJson(ws, { type: "error", payload: { message: "roomId is required" } });
+            return;
+          }
+          const room = await storage.getRoom(roomId);
+          if (!room) {
+            sendJson(ws, { type: "error", payload: { message: "Room not found" } });
+            return;
+          }
+
+          socketRoomSubscriptions.set(ws, roomId);
+          const counts = await buildParticipantCountsForRoom(roomId);
+          if (counts) {
+            sendJson(ws, {
+              type: "participant-counts-updated",
+              payload: { roomId, counts },
+            });
+          }
+          return;
+        }
+
         if (message.type === "join") {
           const { roomId, subroomId, username } = message.payload;
+          const previousRoomId = currentRoomId;
 
           const subroom = await storage.getSubroom(subroomId);
           if (!subroom) {
@@ -258,6 +325,7 @@ export async function registerRoutes(
             });
           }
 
+          currentRoomId = roomId;
           currentSubroomId = subroomId;
           currentUsername = username;
 
@@ -278,6 +346,10 @@ export async function registerRoutes(
             },
             ws,
           );
+          if (previousRoomId && previousRoomId !== roomId) {
+            void emitParticipantCountsUpdate(previousRoomId);
+          }
+          void emitParticipantCountsUpdate(roomId);
           return;
         }
 
@@ -326,6 +398,7 @@ export async function registerRoutes(
     });
 
     ws.on("close", () => {
+      const disconnectedMeta = socketMeta.get(ws);
       if (currentSubroomId) {
         mediasoupService.closePeerMedia(ws, currentSubroomId, broadcastToSubroom);
         broadcastToSubroom(currentSubroomId, {
@@ -334,11 +407,16 @@ export async function registerRoutes(
         });
       }
       socketMeta.delete(ws);
+      socketRoomSubscriptions.delete(ws);
       socketMedia.delete(ws);
       wsLiveness.delete(ws);
+      if (disconnectedMeta) {
+        void emitParticipantCountsUpdate(disconnectedMeta.roomId);
+      }
     });
 
     ws.on("error", () => {
+      socketRoomSubscriptions.delete(ws);
       wsLiveness.delete(ws);
     });
   });

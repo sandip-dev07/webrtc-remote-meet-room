@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { api, buildUrl } from "@shared/routes";
 
 // --- Rooms ---
@@ -108,6 +109,8 @@ export function useSubroomParticipants(subroomId: string) {
 }
 
 export function useRoomSubroomParticipantCounts(roomId: string, subroomIds: string[]) {
+  const queryClient = useQueryClient();
+
   const query = useQuery({
     queryKey: ['room', roomId, 'subroom-participant-counts'],
     queryFn: async () => {
@@ -117,9 +120,42 @@ export function useRoomSubroomParticipantCounts(roomId: string, subroomIds: stri
       return api.rooms.participantCounts.responses[200].parse(await res.json());
     },
     enabled: !!roomId && subroomIds.length > 0,
-    refetchInterval: 3000,
-    refetchIntervalInBackground: false,
   });
+
+  useEffect(() => {
+    if (!roomId || subroomIds.length === 0) return;
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "watch-room", payload: { roomId } }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type !== "participant-counts-updated") return;
+        if (data.payload?.roomId !== roomId) return;
+
+        const parsed = api.rooms.participantCounts.responses[200].safeParse(
+          data.payload?.counts,
+        );
+        if (!parsed.success) return;
+        queryClient.setQueryData(
+          ['room', roomId, 'subroom-participant-counts'],
+          parsed.data,
+        );
+      } catch {
+        // Ignore malformed WS payloads to keep the dashboard resilient.
+      }
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [queryClient, roomId, subroomIds.length]);
 
   return subroomIds.reduce<Record<string, number>>((acc, subroomId) => {
     acc[subroomId] = query.data?.[subroomId] ?? 0;
