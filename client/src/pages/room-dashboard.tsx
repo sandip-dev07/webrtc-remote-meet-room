@@ -123,8 +123,8 @@ export default function RoomDashboard() {
                 <LayoutDashboard size={24} />
               </div>
               <div className="min-w-0">
-                <h1 className="text-xl sm:text-2xl font-display font-bold text-foreground truncate">
-                  Main Room Dashboard
+                <h1 className="text-xl font-display font-semiboldparticipants text-foreground truncate">
+                  Main Room
                 </h1>
                 <p className="text-sm text-muted-foreground">
                   Welcome, {username}{" "}
@@ -148,7 +148,7 @@ export default function RoomDashboard() {
                 className="h-8 w-8 hover:bg-white/10 rounded-lg"
               >
                 {copied ? (
-                  <CheckCircle2 size={16} className="text-green-500" />
+                  <CheckCircle2 size={16} className="text-zinc-100" />
                 ) : (
                   <Copy size={16} />
                 )}
@@ -243,15 +243,11 @@ export default function RoomDashboard() {
                 {subrooms.map((sub) => (
                   <div
                     key={sub.id}
-                    className={`glass-panel p-6 rounded-3xl group transition-colors flex flex-col h-full ${
-                      activeSubroomId === sub.id
-                        ? "border-primary/70 ring-1 ring-primary/40"
-                        : "hover:border-primary/50"
-                    }`}
+                    className={`glass-panel p-6 rounded-3xl group transition-colors flex flex-col h-full`}
                   >
                     <div className="flex-1">
                       <div className="flex items-start justify-between gap-3 mb-2">
-                        <h3 className="text-xl font-display font-bold">
+                        <h3 className="text-xl font-display font-semibold">
                           {sub.name}
                         </h3>
                       </div>

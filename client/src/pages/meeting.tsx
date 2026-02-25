@@ -1,6 +1,16 @@
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
-import { Mic, MicOff, Video, VideoOff, MonitorUp, PhoneOff, MessageSquare, Minimize2, Maximize2, Sparkles } from "lucide-react";
+import {
+  Mic,
+  MicOff,
+  Video,
+  VideoOff,
+  MonitorUp,
+  PhoneOff,
+  MessageSquare,
+  Minimize2,
+  Maximize2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useMeetingStore } from "@/store/meeting-store";
 import { useWebRTC } from "@/hooks/use-webrtc";
@@ -61,9 +71,8 @@ function MiniMeetingPanel({
             </Button>
             <Button
               onClick={onLeave}
-              variant="destructive"
               size="icon"
-              className="h-8 w-8 rounded-lg"
+              className="h-8 w-8 rounded-lg bg-red-500 text-white hover:bg-red-600"
               aria-label="Leave subroom"
             >
               <PhoneOff size={16} />
@@ -140,7 +149,11 @@ function MeetingFooter({
     <footer className="h-20 sm:h-24 bg-black/50 backdrop-blur-xl border-t border-white/10 flex items-center justify-between px-2 sm:px-4 lg:px-8 z-30">
       <div className="hidden xl:block flex-1 min-w-0">
         <p className="text-white/50 text-sm truncate">
-          {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} | {subroomName}
+          {new Date().toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}{" "}
+          | {subroomName}
         </p>
       </div>
 
@@ -164,34 +177,28 @@ function MeetingFooter({
         </Button>
 
         <Button
-          onClick={onCycleBlurMode}
-          variant={cameraBlurMode === "none" ? "secondary" : "default"}
-          size="icon"
-          className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full hover:scale-105 transition-transform ${
-            cameraBlurMode !== "none" ? "bg-blue-500 hover:bg-blue-600" : ""
-          }`}
-          disabled={!isCamOn || isScreenSharing}
-          title={`Background blur: ${cameraBlurMode}`}
-        >
-          <Sparkles size={18} className={cameraBlurMode !== "none" ? "text-white" : ""} />
-        </Button>
-
-        <Button
           onClick={onToggleScreenShare}
           variant={isScreenSharing ? "default" : "secondary"}
           size="icon"
-          className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full hover:scale-105 transition-transform ${isScreenSharing ? 'bg-blue-500 hover:bg-blue-600' : ''}`}
+          className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full hover:scale-105 transition-transform ${isScreenSharing ? "bg-zinc-300 hover:bg-zinc-200 text-zinc-950" : ""}`}
           disabled={!canScreenShare}
-          title={!canScreenShare ? "Screen share not supported on this browser/device" : undefined}
+          title={
+            !canScreenShare
+              ? "Screen share not supported on this browser/device"
+              : undefined
+          }
         >
-          <MonitorUp size={18} className={isScreenSharing ? "text-white" : ""} />
+          <MonitorUp
+            size={18}
+            className={isScreenSharing ? "text-white" : ""}
+          />
         </Button>
 
         <Button
           onClick={onToggleChat}
           variant={isChatOpen ? "secondary" : "default"}
           size="icon"
-          className={`md:hidden w-10 h-10 rounded-full hover:bg-white/10 ${isChatOpen ? 'bg-white/10 text-primary' : 'text-white'}`}
+          className={`md:hidden w-10 h-10 rounded-full hover:bg-white/10 ${isChatOpen ? "bg-white/10 text-primary" : "text-white"}`}
         >
           <MessageSquare size={18} />
         </Button>
@@ -200,8 +207,7 @@ function MeetingFooter({
 
         <Button
           onClick={onLeave}
-          variant="destructive"
-          className="px-3 sm:px-5 h-10 sm:h-12 rounded-full font-medium hover:bg-red-600 hover:scale-105 transition-transform shadow-lg shadow-red-500/20"
+          className="px-3 sm:px-5 h-10 sm:h-12 rounded-full font-medium bg-red-500 text-white hover:bg-red-600 hover:scale-105 transition-transform shadow-lg shadow-black/30"
         >
           <PhoneOff size={18} className="sm:mr-2" />
           <span className="hidden sm:inline">Leave</span>
@@ -213,7 +219,7 @@ function MeetingFooter({
           onClick={onToggleChat}
           variant={isChatOpen ? "secondary" : "ghost"}
           size="icon"
-          className={`w-12 h-12 rounded-full hover:bg-white/10 ${isChatOpen ? 'bg-white/10 text-primary' : 'text-white bg-sky-500'}`}
+          className={`w-12 h-12 rounded-full hover:bg-white/10 ${isChatOpen ? "bg-white/10 text-primary" : "text-white bg-zinc-700"}`}
         >
           <MessageSquare size={20} />
         </Button>
@@ -222,11 +228,16 @@ function MeetingFooter({
   );
 }
 
-export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingProps) {
+export default function Meeting({
+  roomId,
+  subroomId,
+  mode = "full",
+}: MeetingProps) {
   const [, setLocation] = useLocation();
-  const { username, cameraBlurMode, setCameraBlurMode, setSubroomMinimized } = useMeetingStore();
+  const { username, cameraBlurMode, setCameraBlurMode, setSubroomMinimized } =
+    useMeetingStore();
   const { toast } = useToast();
-  
+
   const [isChatOpen, setIsChatOpen] = useState(false);
   const cycleBlurMode = () => {
     if (cameraBlurMode === "none") {
@@ -244,10 +255,10 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
   const { data: subroomData, error: subroomError } = useSubroom(subroomId);
 
   // Initialize WebRTC and Signaling
-  const { 
-    localStream, 
-    peers, 
-    isConnected, 
+  const {
+    localStream,
+    peers,
+    isConnected,
     error: rtcError,
     isMicOn,
     isCamOn,
@@ -256,12 +267,13 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
     isScreenSharing,
     canScreenShare,
     toggleScreenShare,
-    ws
+    ws,
   } = useWebRTC({ roomId, subroomId, username });
 
   // Calculate dynamic grid layout based on participant count
   const participantCount = Object.keys(peers).length + 1; // +1 for local
-  const tileAspect: "video" | "square" | "auto" = participantCount === 1 ? "auto" : "video";
+  const tileAspect: "video" | "square" | "auto" =
+    participantCount === 1 ? "auto" : "video";
   const participantTiles = [
     {
       key: "local",
@@ -269,7 +281,7 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
       username,
       isLocal: !isScreenSharing,
       muted: true,
-      blurMode: !isScreenSharing ? cameraBlurMode : "none" as const,
+      blurMode: !isScreenSharing ? cameraBlurMode : ("none" as const),
       aspect: tileAspect,
     },
     ...Object.entries(peers).map(([peerId, peer]) => ({
@@ -282,14 +294,17 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
       aspect: tileAspect,
     })),
   ];
-  
+
   const gridClass = useMemo(() => {
     if (participantCount === 1) return "grid-cols-1";
     if (participantCount === 2) return "grid-cols-1 md:grid-cols-2";
-    if (participantCount === 3) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
+    if (participantCount === 3)
+      return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
     if (participantCount === 4) return "grid-cols-1 sm:grid-cols-2";
-    if (participantCount <= 6) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
-    if (participantCount <= 9) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
+    if (participantCount <= 6)
+      return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
+    if (participantCount <= 9)
+      return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
     return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
   }, [participantCount]);
 
@@ -303,9 +318,18 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
     return (
       <div className="h-screen bg-background flex items-center justify-center p-4 text-center">
         <div className="glass-panel p-8 rounded-3xl max-w-md w-full border-destructive/20">
-          <h2 className="text-xl font-bold text-destructive mb-2">Connection Error</h2>
-          <p className="text-muted-foreground mb-6">{rtcError || "Could not join the room."}</p>
-          <Button onClick={() => setLocation(`/room/${roomId}`)} className="rounded-xl w-full">Back to Dashboard</Button>
+          <h2 className="text-xl font-bold text-destructive mb-2">
+            Connection Error
+          </h2>
+          <p className="text-muted-foreground mb-6">
+            {rtcError || "Could not join the room."}
+          </p>
+          <Button
+            onClick={() => setLocation(`/room/${roomId}`)}
+            className="rounded-xl w-full"
+          >
+            Back to Dashboard
+          </Button>
         </div>
       </div>
     );
@@ -313,7 +337,7 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
 
   const handleLeave = () => {
     if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
+      localStream.getTracks().forEach((track) => track.stop());
     }
     if (ws) ws.close();
     setSubroomMinimized(false);
@@ -334,7 +358,8 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
     if (!canScreenShare) {
       toast({
         title: "Screen share not supported",
-        description: "Use Chrome/Edge on Android over HTTPS. iOS browsers currently do not support web screen sharing.",
+        description:
+          "Use Chrome/Edge on Android over HTTPS. iOS browsers currently do not support web screen sharing.",
         variant: "destructive",
       });
       return;
@@ -371,8 +396,7 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
   }
 
   return (
-    <div className="h-dvh bg-[#090E1A] flex flex-col overflow-y-auto overflow-x-hidden font-sans">
-      
+    <div className="h-dvh bg-background flex flex-col overflow-y-auto overflow-x-hidden font-sans">
       {/* Top Bar */}
       <header className="h-14 sm:h-16 px-3 sm:px-6 flex items-center justify-between bg-black/30 border-b border-white/10 z-10">
         <div className="flex items-center gap-2 sm:gap-4 min-w-0">
@@ -386,11 +410,15 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
             {participantCount}/10
           </span>
         </div>
-        
+
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <div className="flex items-center gap-2 text-xs font-medium px-2 sm:px-3 py-1.5 rounded-full bg-white/5 border border-white/10">
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500'}`} />
-            <span className="hidden sm:inline">{isConnected ? 'Connected' : 'Connecting...'}</span>
+            <div
+              className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-500 shadow-[0_0_8px_rgba(255,255,255,0.45)]" : "bg-zinc-500"}`}
+            />
+            <span className="hidden sm:inline">
+              {isConnected ? "Connected" : "Connecting..."}
+            </span>
           </div>
           <Button
             onClick={handleMinimize}
@@ -406,9 +434,10 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
 
       {/* Main Content Area */}
       <main className="flex-1 flex overflow-y-auto overflow-x-hidden relative min-h-0">
-        
         {/* Video Grid */}
-        <div className={`flex-1 p-2 sm:p-4 lg:p-5 transition-all duration-300 ${isChatOpen ? 'mr-0' : ''}`}>
+        <div
+          className={`flex-1 p-2 sm:p-4 lg:p-5 transition-all duration-300 ${isChatOpen ? "mr-0" : ""}`}
+        >
           <div className={`w-full h-full video-grid ${gridClass} gap-3`}>
             {participantTiles.map((tile) => (
               <VideoPlayer
@@ -422,14 +451,15 @@ export default function Meeting({ roomId, subroomId, mode = "full" }: MeetingPro
                 className={participantCount === 1 ? "h-full max-h-full" : ""}
               />
             ))}
-
           </div>
         </div>
 
         {/* Sidebar overlay container for mobile, inline for desktop */}
-        <div className={`absolute top-0 bottom-20 sm:bottom-24 right-2 sm:right-4 w-[calc(100vw-1rem)] sm:w-auto z-20 transition-all duration-300 transform ${isChatOpen ? 'translate-x-0' : 'translate-x-[120%]'}`}>
-          <ChatSidebar 
-            isOpen={isChatOpen} 
+        <div
+          className={`absolute top-0 bottom-20 sm:bottom-24 right-2 sm:right-4 w-[calc(100vw-1rem)] sm:w-auto z-20 transition-all duration-300 transform ${isChatOpen ? "translate-x-0" : "translate-x-[120%]"}`}
+        >
+          <ChatSidebar
+            isOpen={isChatOpen}
             onClose={() => setIsChatOpen(false)}
             ws={ws}
             subroomId={subroomId}

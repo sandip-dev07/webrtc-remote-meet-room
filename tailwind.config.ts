@@ -76,10 +76,10 @@ export default {
           border: "var(--sidebar-accent-border)"
         },
         status: {
-          online: "rgb(34 197 94)",
-          away: "rgb(245 158 11)",
-          busy: "rgb(239 68 68)",
-          offline: "rgb(156 163 175)",
+          online: "rgb(244 244 245)",
+          away: "rgb(161 161 170)",
+          busy: "rgb(113 113 122)",
+          offline: "rgb(82 82 91)",
         },
       },
       fontFamily: {

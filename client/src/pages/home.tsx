@@ -28,7 +28,7 @@ export default function Home() {
   const inputClassName =
     "h-12 rounded-xl bg-black/20 border-white/10 text-base text-foreground placeholder:text-muted-foreground/80 focus-visible:ring-primary/60 focus-visible:ring-offset-0";
   const primaryButtonClassName =
-    "h-12 rounded-xl text-base font-semibold bg-gradient-to-r from-primary to-blue-600 hover:from-primary/90 hover:to-blue-600/90 shadow-lg shadow-primary/20 transition-colors";
+    "h-12 rounded-xl text-base font-semibold bg-gradient-to-r from-zinc-200 to-zinc-400 text-zinc-950 hover:from-zinc-100 hover:to-zinc-300 shadow-lg shadow-zinc-900/30 transition-colors";
   const secondaryButtonClassName =
     "h-12 rounded-xl text-base font-semibold bg-white/5 border border-white/20 hover:bg-white/10 transition-colors";
 
@@ -103,7 +103,7 @@ export default function Home() {
             <span>Next-Gen Video Meetings</span>
           </div>
           <h1 className="text-5xl lg:text-7xl font-display font-bold leading-tight text-foreground">
-            Connect <br/> <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-purple-400">Anywhere,</span> <br/> Anytime.
+            Connect <br/> <span className="text-transparent bg-clip-text bg-gradient-to-r from-zinc-100 to-zinc-400">Anywhere,</span> <br/> Anytime.
           </h1>
           <p className="text-lg text-muted-foreground max-w-md mx-auto lg:mx-0">
             Professional video meetings with built-in subrooms. Collaborate seamlessly without limits.
