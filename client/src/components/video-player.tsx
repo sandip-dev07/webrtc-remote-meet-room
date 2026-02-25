@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { MicOff } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import type { CameraBlurMode } from '@/store/meeting-store';
+import { useEffect, useRef, useState } from "react";
+import { MicOff } from "lucide-react";
+import { cn } from "@/lib/utils";
+import type { CameraBlurMode } from "@/store/meeting-store";
 
 interface VideoPlayerProps {
   stream: MediaStream | null;

@@ -14,10 +14,10 @@ export default function Home() {
   const { toast } = useToast();
   const createRoom = useCreateRoom();
   const prefilledOrganization = useMemo(
-    () =>
-      new URLSearchParams(search).get("organization") ??
-      new URLSearchParams(search).get("roomId") ??
-      "",
+    () => {
+      const params = new URLSearchParams(search);
+      return params.get("organization") ?? params.get("roomId") ?? "";
+    },
     [search],
   );
   
@@ -28,12 +28,15 @@ export default function Home() {
   const inputClassName =
     "h-12 rounded-xl bg-black/20 border-white/10 text-base text-foreground placeholder:text-muted-foreground/80 focus-visible:ring-primary/60 focus-visible:ring-offset-0";
   const primaryButtonClassName =
-    "h-12 rounded-xl text-base font-semibold bg-gradient-to-r from-zinc-200 to-zinc-400 text-zinc-950 hover:from-zinc-100 hover:to-zinc-300 shadow-lg shadow-zinc-900/30 transition-colors";
+    "h-12 rounded-xl text-base font-semibold bg-gradient-to-r from-zinc-200 to-blue-400 text-zinc-950 hover:from-zinc-100 hover:to-blue-300 shadow-lg shadow-zinc-900/30 transition-colors";
   const secondaryButtonClassName =
     "h-12 rounded-xl text-base font-semibold bg-white/5 border border-white/20 hover:bg-white/10 transition-colors";
 
   const handleCreate = async () => {
-    if (!createName.trim() || !organizationName.trim()) {
+    const trimmedCreateName = createName.trim();
+    const trimmedOrganizationName = organizationName.trim();
+
+    if (!trimmedCreateName || !trimmedOrganizationName) {
       toast({
         title: "Fields required",
         description: "Please enter your name and organization name.",
@@ -42,12 +45,12 @@ export default function Home() {
       return;
     }
     
-    setUsername(createName.trim());
+    setUsername(trimmedCreateName);
     
     try {
       const room = await createRoom.mutateAsync({
-        hostUsername: createName.trim(),
-        organizationName: organizationName.trim(),
+        hostUsername: trimmedCreateName,
+        organizationName: trimmedOrganizationName,
       });
       setLocation(`/room/${room.id}`);
       toast({ title: "Room Created", description: `${room.organizationName} is ready.` });
@@ -65,7 +68,10 @@ export default function Home() {
       .slice(0, 64);
 
   const handleJoin = () => {
-    if (!joinName.trim() || !organizationToJoin.trim()) {
+    const trimmedJoinName = joinName.trim();
+    const trimmedOrganizationToJoin = organizationToJoin.trim();
+
+    if (!trimmedJoinName || !trimmedOrganizationToJoin) {
       toast({
         title: "Fields required",
         description: "Please enter both joining name and organization name.",
@@ -74,7 +80,7 @@ export default function Home() {
       return;
     }
     
-    const organizationKey = toOrganizationKey(organizationToJoin);
+    const organizationKey = toOrganizationKey(trimmedOrganizationToJoin);
     if (!organizationKey) {
       toast({
         title: "Invalid organization",
@@ -84,7 +90,7 @@ export default function Home() {
       return;
     }
 
-    setUsername(joinName.trim());
+    setUsername(trimmedJoinName);
     setLocation(`/room/${organizationKey}`);
   };
 
@@ -137,7 +143,7 @@ export default function Home() {
               disabled={createRoom.isPending}
               className={`w-full ${primaryButtonClassName}`}
             >
-              {createRoom.isPending ? "Creating..." : "Create New Main Room"}
+              {createRoom.isPending ? "Creating..." : "Create New Room"}
               {!createRoom.isPending && <Plus className="ml-2" />}
             </Button>
 

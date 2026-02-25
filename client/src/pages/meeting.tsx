@@ -69,18 +69,11 @@ function MiniMeetingPanel({
             >
               <Maximize2 size={16} />
             </Button>
-            <Button
-              onClick={onLeave}
-              size="icon"
-              className="h-8 w-8 rounded-lg bg-red-500 text-white hover:bg-red-600"
-              aria-label="Leave subroom"
-            >
-              <PhoneOff size={16} />
-            </Button>
+            
           </div>
         </div>
 
-        <div className="h-[200px] p-2">
+        <div className="h-[200px] p-2 overflow-hidden">
           <VideoPlayer
             stream={localStream}
             username={username}
@@ -108,6 +101,14 @@ function MiniMeetingPanel({
           >
             {isCamOn ? <Video size={16} /> : <VideoOff size={16} />}
           </Button>
+          <Button
+              onClick={onLeave}
+              size="icon"
+              className="h-8 w-8 rounded-lg bg-red-500 text-white hover:bg-red-600"
+              aria-label="Leave subroom"
+            >
+              <PhoneOff size={16} />
+            </Button>
         </div>
       </div>
     </div>
@@ -120,11 +121,9 @@ interface MeetingFooterProps {
   isCamOn: boolean;
   isScreenSharing: boolean;
   canScreenShare: boolean;
-  cameraBlurMode: "none" | "light" | "strong";
   isChatOpen: boolean;
   onToggleMic: () => Promise<void>;
   onToggleCam: () => Promise<void>;
-  onCycleBlurMode: () => void;
   onToggleScreenShare: () => Promise<void>;
   onToggleChat: () => void;
   onLeave: () => void;
@@ -136,11 +135,9 @@ function MeetingFooter({
   isCamOn,
   isScreenSharing,
   canScreenShare,
-  cameraBlurMode,
   isChatOpen,
   onToggleMic,
   onToggleCam,
-  onCycleBlurMode,
   onToggleScreenShare,
   onToggleChat,
   onLeave,
@@ -234,22 +231,11 @@ export default function Meeting({
   mode = "full",
 }: MeetingProps) {
   const [, setLocation] = useLocation();
-  const { username, cameraBlurMode, setCameraBlurMode, setSubroomMinimized } =
+  const { username, cameraBlurMode, setSubroomMinimized } =
     useMeetingStore();
   const { toast } = useToast();
 
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const cycleBlurMode = () => {
-    if (cameraBlurMode === "none") {
-      setCameraBlurMode("light");
-      return;
-    }
-    if (cameraBlurMode === "light") {
-      setCameraBlurMode("strong");
-      return;
-    }
-    setCameraBlurMode("none");
-  };
 
   // Fetch subroom details just for the name
   const { data: subroomData, error: subroomError } = useSubroom(subroomId);
@@ -298,13 +284,9 @@ export default function Meeting({
   const gridClass = useMemo(() => {
     if (participantCount === 1) return "grid-cols-1";
     if (participantCount === 2) return "grid-cols-1 md:grid-cols-2";
-    if (participantCount === 3)
-      return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
+    if (participantCount === 3) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
     if (participantCount === 4) return "grid-cols-1 sm:grid-cols-2";
-    if (participantCount <= 6)
-      return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
-    if (participantCount <= 9)
-      return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
+    if (participantCount <= 6) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
     return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
   }, [participantCount]);
 
@@ -474,11 +456,9 @@ export default function Meeting({
         isCamOn={isCamOn}
         isScreenSharing={isScreenSharing}
         canScreenShare={canScreenShare}
-        cameraBlurMode={cameraBlurMode}
         isChatOpen={isChatOpen}
         onToggleMic={toggleMic}
         onToggleCam={toggleCam}
-        onCycleBlurMode={cycleBlurMode}
         onToggleScreenShare={handleToggleScreenShare}
         onToggleChat={() => setIsChatOpen(!isChatOpen)}
         onLeave={handleLeave}
